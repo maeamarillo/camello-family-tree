@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "174887027983",
+    "project_id": "camello-family-tree",
+    "storage_bucket": "camello-family-tree.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:174887027983:android:cb23ac471fa4499d376a7a",
+        "android_client_info": {
+          "package_name": "com.example.camello_family_tree"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyCQoLSP4gIAyda_T4iEfncIE91ztdUyNSw"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

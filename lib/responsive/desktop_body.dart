@@ -1,3 +1,6 @@
+import 'package:camello_family_tree/auth_service.dart';
+import 'package:camello_family_tree/dashboard_page/dashboard_page.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:lucide_icons/lucide_icons.dart';
 
@@ -53,6 +56,27 @@ class _LoginPageState extends State<LoginPage> {
   final password = TextEditingController();
   bool show = false;
 
+  void login() async {
+    try {
+      await authService.value.signIn(
+        email: email.text,
+        password: password.text,
+      );
+      popLogin();
+    } on FirebaseAuthException catch (e) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(e.message ?? 'Login failed')));
+    }
+  }
+
+  void popLogin() {
+    Navigator.pushReplacement(
+      context,
+      MaterialPageRoute(builder: (context) => const DashboardPage()),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return AuthScaffold(
@@ -91,7 +115,12 @@ class _LoginPageState extends State<LoginPage> {
             ),
           ),
           const SizedBox(height: 25),
-          PrimaryButton(text: 'Log In', onPressed: () {}),
+          PrimaryButton(
+            text: 'Log In',
+            onPressed: () {
+              login();
+            },
+          ),
           const SizedBox(height: 15),
           Center(
             child: LinkRow(
@@ -126,6 +155,28 @@ class _RegisterPageState extends State<RegisterPage> {
   final email = TextEditingController();
   final password = TextEditingController();
   bool show = false;
+
+  void register() async {
+    try {
+      await authService.value.createAccount(
+        email: email.text,
+        password: password.text,
+      );
+      popPage();
+    } on FirebaseAuthException catch (e) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(e.message ?? 'Error Register')));
+    }
+  }
+
+  void popPage() {
+    Navigator.pushReplacementNamed(context, LoginPage.route);
+    // Navigator.pushReplacement(
+    //   context,
+    //   MaterialPageRoute(builder: (context) => const DashboardPage()),
+    // );
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -165,7 +216,12 @@ class _RegisterPageState extends State<RegisterPage> {
             ),
           ),
           const SizedBox(height: 25),
-          PrimaryButton(text: 'Register', onPressed: () {}),
+          PrimaryButton(
+            text: 'Register',
+            onPressed: () {
+              register();
+            },
+          ),
           const SizedBox(height: 15),
           Center(
             child: LinkRow(
