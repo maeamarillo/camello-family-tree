@@ -199,7 +199,7 @@ class AuthScaffold extends StatelessWidget {
         height: double.infinity,
         decoration: const BoxDecoration(
           image: DecorationImage(
-            image: AssetImage('images/camello-background.jpg'),
+            image: AssetImage('images/camello-background.JPG'),
             fit: BoxFit.cover,
           ),
         ),
