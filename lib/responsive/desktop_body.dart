@@ -227,7 +227,11 @@ class AppLogo extends StatelessWidget {
   Widget build(BuildContext context) {
     return Column(
       children: [
-        Image.asset('images/camello-logo.PNG', width: 200, height: 200),
+        Image.network(
+          'https://raw.githubusercontent.com/maeamarillo/camello-family-tree/main/assets/images/camello-logo.PNG',
+          width: 200,
+          height: 200,
+        ),
       ],
     );
   }
