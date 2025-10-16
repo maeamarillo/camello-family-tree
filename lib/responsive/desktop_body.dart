@@ -197,12 +197,15 @@ class AuthScaffold extends StatelessWidget {
         alignment: Alignment.center,
         width: double.infinity,
         height: double.infinity,
-        decoration: const BoxDecoration(
+        decoration: BoxDecoration(
           image: DecorationImage(
-            image: AssetImage('images/camello-background.JPG'),
+            image: NetworkImage(
+              'https://raw.githubusercontent.com/maeamarillo/camello-family-tree/main/assets/images/camello-background.jpg',
+            ),
             fit: BoxFit.cover,
           ),
         ),
+
         child: Padding(
           padding: const EdgeInsets.symmetric(horizontal: 20),
           child: SingleChildScrollView(
