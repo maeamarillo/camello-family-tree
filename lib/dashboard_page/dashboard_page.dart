@@ -88,7 +88,7 @@ class FamilyTreeStore extends ChangeNotifier {
   final Map<int, FamilyNode> _nodes = {};
   int _nextId = 1;
 
-  /// ✅ Track newest node so ONLY it "snaps" (others don't rearrange)
+  /// Track newest node (kept for reference; not used for overlap pushing anymore)
   int? lastAddedId;
 
   Map<int, FamilyNode> get nodes => _nodes;
@@ -164,7 +164,7 @@ class FamilyTreeStore extends ChangeNotifier {
     return null;
   }
 
-  /// ✅ NEW: Find nearest free slot at a given level, centered around an anchor slot.
+  /// ✅ Find nearest free slot at a given level, centered around an anchor slot.
   /// If preferLeft=true, it searches left first: 0, -1, +1, -2, +2...
   /// Else it searches right first: 0, +1, -1, +2, -2...
   double _nearestFreeSlotAtLevel({
@@ -264,6 +264,83 @@ class FamilyTreeStore extends ChangeNotifier {
     }
   }
 
+  // -------------------------------------------------------------------
+  // ✅ NEW: Anti-overlap + Anti-drift stabilization (slot-based, stable)
+  // -------------------------------------------------------------------
+
+  /// Minimum separation in integer slots on a single level.
+  static const int _minSlotGap = 1;
+
+  void _recenterSlots() {
+    if (_nodes.isEmpty) return;
+
+    final avg =
+        _nodes.values.map((n) => n.slotX).reduce((a, b) => a + b) / _nodes.length;
+
+    // Shift by whole slots to keep numbers small and stable.
+    final shift = avg.round();
+    if (shift == 0) return;
+
+    for (final n in _nodes.values) {
+      n.slotX -= shift;
+    }
+  }
+
+  void _compactSlotsPerLevel() {
+    if (_nodes.isEmpty) return;
+
+    final byLevel = <int, List<int>>{};
+    for (final n in _nodes.values) {
+      byLevel.putIfAbsent(n.levelY, () => []).add(n.id);
+    }
+
+    for (final entry in byLevel.entries) {
+      final ids = entry.value;
+      ids.sort((a, b) => _nodes[a]!.slotX.compareTo(_nodes[b]!.slotX));
+
+      final taken = <int>{};
+      int? prevSlot;
+
+      for (final id in ids) {
+        final node = _nodes[id]!;
+        int target = node.slotX.round();
+
+        if (prevSlot != null) {
+          final minAllowed = prevSlot + _minSlotGap;
+          if (target < minAllowed) target = minAllowed;
+        }
+
+        // Find next free if occupied
+        while (taken.contains(target)) {
+          target += 1;
+        }
+
+        taken.add(target);
+        node.slotX = target.toDouble();
+        prevSlot = target;
+      }
+
+      // Pull-back pass (reduces unnecessary expansion)
+      ids.sort((a, b) => _nodes[a]!.slotX.compareTo(_nodes[b]!.slotX));
+      for (int i = ids.length - 2; i >= 0; i--) {
+        final left = _nodes[ids[i]]!;
+        final right = _nodes[ids[i + 1]]!;
+        final maxAllowed = right.slotX.round() - _minSlotGap;
+        final cur = left.slotX.round();
+        if (cur > maxAllowed) {
+          left.slotX = maxAllowed.toDouble();
+        }
+      }
+    }
+  }
+
+  void _stabilizeLayout() {
+    _compactSlotsPerLevel();
+    _recenterSlots();
+  }
+
+  // -------------------------------------------------------------------
+
   FamilyNode? addParent({
     required int personId,
     required Kind parentKind,
@@ -299,6 +376,7 @@ class FamilyTreeStore extends ChangeNotifier {
       );
     }
 
+    _stabilizeLayout();
     notifyListeners();
     return parent;
   }
@@ -329,6 +407,7 @@ class FamilyTreeStore extends ChangeNotifier {
       linkParentChild(parentId: coparentId, childId: child.id, notify: false);
     }
 
+    _stabilizeLayout();
     notifyListeners();
     return child;
   }
@@ -364,42 +443,9 @@ class FamilyTreeLayout {
       pos[n.id] = Offset(n.slotX * xStep, n.levelY * yStep);
     }
 
-    final newest = store.lastAddedId;
-    final byLevel = <int, List<int>>{};
-    for (final n in nodes.values) {
-      byLevel.putIfAbsent(n.levelY, () => []).add(n.id);
-    }
-
-    for (final entry in byLevel.entries) {
-      final ids = entry.value
-        ..sort((a, b) => pos[a]!.dx.compareTo(pos[b]!.dx));
-
-      for (int i = 1; i < ids.length; i++) {
-        final a = ids[i - 1];
-        final b = ids[i];
-
-        final pa = pos[a]!;
-        final pb = pos[b]!;
-        final minX = pa.dx + cardSize.width + hGap * 0.6;
-
-        if (pb.dx < minX) {
-          if (newest == b) {
-            pos[b] = Offset(minX, pb.dy);
-
-            final n = store.getNode(b);
-            n.slotX = minX / xStep;
-            n.manualOffset = Offset.zero;
-          } else if (newest == a) {
-            final newAx = pa.dx + (minX - pb.dx);
-            pos[a] = Offset(newAx, pa.dy);
-
-            final n = store.getNode(a);
-            n.slotX = newAx / xStep;
-            n.manualOffset = Offset.zero;
-          }
-        }
-      }
-    }
+    // ✅ IMPORTANT:
+    // Removed "only newest snaps" pixel-based collision pushing.
+    // Overlap prevention now happens in the store via _stabilizeLayout().
 
     const double pad = 400;
     double minX = double.infinity, minY = double.infinity;
@@ -495,7 +541,7 @@ class _FamilyTreePageState extends State<FamilyTreePage> {
             actions: [
               IconButton(
                 tooltip: 'Reset view',
-                onPressed: () => _fitToScreen(bounds), // ✅ re-center (no cut)
+                onPressed: () => _fitToScreen(bounds),
                 icon: const Icon(Icons.center_focus_strong),
               ),
               IconButton(
@@ -508,8 +554,8 @@ class _FamilyTreePageState extends State<FamilyTreePage> {
           body: InteractiveViewer(
             transformationController: _tc,
             constrained: false,
-            boundaryMargin: const EdgeInsets.all(1000000), // ✅ huge finite margin
-            clipBehavior: Clip.none, // ✅ stop clipping
+            boundaryMargin: const EdgeInsets.all(1000000),
+            clipBehavior: Clip.none,
             minScale: 0.02,
             maxScale: 10.0,
             child: SizedBox(
