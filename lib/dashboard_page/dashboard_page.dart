@@ -72,8 +72,10 @@ class FamilyNode {
   final Set<int> parents = {};
   final Set<int> children = {};
 
+  /// ✅ Spouse links (bi-directional)
+  final Set<int> spouses = {};
+
   /// ✅ Persistent layout metadata (NO global recompute).
-  /// levelY increases downward (parents above children can be negative)
   int levelY;
 
   /// Stable horizontal "slot" (like a column)
@@ -88,7 +90,6 @@ class FamilyTreeStore extends ChangeNotifier {
   final Map<int, FamilyNode> _nodes = {};
   int _nextId = 1;
 
-  /// Track newest node (kept for reference; not used for overlap pushing anymore)
   int? lastAddedId;
 
   Map<int, FamilyNode> get nodes => _nodes;
@@ -114,7 +115,6 @@ class FamilyTreeStore extends ChangeNotifier {
   FamilyNode getNode(int id) => _nodes[id]!;
 
   /// Ensures parent<->child linkage is always bi-directional.
-  /// ✅ notify can be disabled to avoid mid-operation rebuilds.
   void linkParentChild({
     required int parentId,
     required int childId,
@@ -130,6 +130,26 @@ class FamilyTreeStore extends ChangeNotifier {
     child.parents.add(parentId);
 
     if (notify) notifyListeners();
+  }
+
+  /// ✅ Spouse linkage is always bi-directional.
+  void linkSpouses({required int aId, required int bId, bool notify = true}) {
+    if (aId == bId) return;
+    if (!_nodes.containsKey(aId) || !_nodes.containsKey(bId)) return;
+
+    final a = getNode(aId);
+    final b = getNode(bId);
+
+    a.spouses.add(bId);
+    b.spouses.add(aId);
+
+    if (notify) notifyListeners();
+  }
+
+  int? spouseOf(int personId) {
+    final n = getNode(personId);
+    if (n.spouses.isEmpty) return null;
+    return n.spouses.first;
   }
 
   void renameNode(int id, String newName) {
@@ -153,7 +173,7 @@ class FamilyTreeStore extends ChangeNotifier {
   }
 
   /// Finds a co-parent for `from` (based on any shared existing child).
-  int? _findCoParent(int fromNodeId) {
+  int? _findCoParentBySharedChild(int fromNodeId) {
     final from = getNode(fromNodeId);
     for (final existingChildId in from.children) {
       final existingChild = getNode(existingChildId);
@@ -164,21 +184,37 @@ class FamilyTreeStore extends ChangeNotifier {
     return null;
   }
 
+  /// Prefer spouse as co-parent (if present), otherwise fall back to shared-child logic.
+  int? _findCoParentPreferSpouse(int fromNodeId) {
+    final sp = spouseOf(fromNodeId);
+    if (sp != null) return sp;
+    return _findCoParentBySharedChild(fromNodeId);
+  }
+
+  /// ✅ Spouse kind options (opposite gender) — NO "Son" and NO "Daughter"
+  List<Kind> allowedSpouseKindsFor(Kind personKind) {
+    final wantsFemale = personKind.gender == Gender.male;
+    if (wantsFemale) return const [Kind.mother]; // ✅ removed Kind.daughter
+    return const [Kind.father]; // ✅ spouse for female -> father only
+  }
+
+  // -------------------------------------------------------------------
+  // ✅ Slot picking that avoids drift + avoids overlaps when crowded
+  // -------------------------------------------------------------------
+
   /// ✅ Find nearest free slot at a given level, centered around an anchor slot.
-  /// If preferLeft=true, it searches left first: 0, -1, +1, -2, +2...
-  /// Else it searches right first: 0, +1, -1, +2, -2...
   double _nearestFreeSlotAtLevel({
     required int levelY,
     required double anchorSlot,
     required bool preferLeft,
   }) {
+    // Treat slots as integers to avoid rounding surprises
     final taken = <int>{};
     for (final n in _nodes.values) {
-      if (n.levelY == levelY) {
-        taken.add(n.slotX.round());
-      }
+      if (n.levelY == levelY) taken.add(n.slotX.toInt());
     }
 
+    // anchor can be midpoint -> round once
     final base = anchorSlot.round();
 
     for (int d = 0; d < 500; d++) {
@@ -206,7 +242,7 @@ class FamilyTreeStore extends ChangeNotifier {
     final from = getNode(fromNodeId);
     final childLevel = from.levelY + 1;
 
-    final coparentId = _findCoParent(fromNodeId);
+    final coparentId = _findCoParentPreferSpouse(fromNodeId);
     if (coparentId == null) {
       return _nearestFreeSlotAtLevel(
         levelY: childLevel,
@@ -265,26 +301,10 @@ class FamilyTreeStore extends ChangeNotifier {
   }
 
   // -------------------------------------------------------------------
-  // ✅ NEW: Anti-overlap + Anti-drift stabilization (slot-based, stable)
+  // ✅ Anti-overlap + Anti-drift stabilization (slot-based, stable)
   // -------------------------------------------------------------------
 
-  /// Minimum separation in integer slots on a single level.
   static const int _minSlotGap = 1;
-
-  void _recenterSlots() {
-    if (_nodes.isEmpty) return;
-
-    final avg =
-        _nodes.values.map((n) => n.slotX).reduce((a, b) => a + b) / _nodes.length;
-
-    // Shift by whole slots to keep numbers small and stable.
-    final shift = avg.round();
-    if (shift == 0) return;
-
-    for (final n in _nodes.values) {
-      n.slotX -= shift;
-    }
-  }
 
   void _compactSlotsPerLevel() {
     if (_nodes.isEmpty) return;
@@ -301,16 +321,16 @@ class FamilyTreeStore extends ChangeNotifier {
       final taken = <int>{};
       int? prevSlot;
 
+      // forward pass: only push right when collisions/gaps are violated
       for (final id in ids) {
         final node = _nodes[id]!;
-        int target = node.slotX.round();
+        int target = node.slotX.toInt();
 
         if (prevSlot != null) {
           final minAllowed = prevSlot + _minSlotGap;
           if (target < minAllowed) target = minAllowed;
         }
 
-        // Find next free if occupied
         while (taken.contains(target)) {
           target += 1;
         }
@@ -320,26 +340,130 @@ class FamilyTreeStore extends ChangeNotifier {
         prevSlot = target;
       }
 
-      // Pull-back pass (reduces unnecessary expansion)
+      // pull-back pass: pull left when possible without violating min gap
       ids.sort((a, b) => _nodes[a]!.slotX.compareTo(_nodes[b]!.slotX));
       for (int i = ids.length - 2; i >= 0; i--) {
         final left = _nodes[ids[i]]!;
         final right = _nodes[ids[i + 1]]!;
-        final maxAllowed = right.slotX.round() - _minSlotGap;
-        final cur = left.slotX.round();
-        if (cur > maxAllowed) {
-          left.slotX = maxAllowed.toDouble();
-        }
+        final maxAllowed = right.slotX.toInt() - _minSlotGap;
+        final cur = left.slotX.toInt();
+        if (cur > maxAllowed) left.slotX = maxAllowed.toDouble();
       }
+    }
+  }
+
+  /// ✅ Anchor the whole tree to a stable root-ish node (prevents "drift far away")
+  void _anchorToRoot() {
+    if (_nodes.isEmpty) return;
+
+    // Lowest levelY, then smallest id
+    FamilyNode anchor = _nodes.values.first;
+    for (final n in _nodes.values) {
+      if (n.levelY < anchor.levelY) {
+        anchor = n;
+      } else if (n.levelY == anchor.levelY && n.id < anchor.id) {
+        anchor = n;
+      }
+    }
+
+    final shift = anchor.slotX.toInt();
+    if (shift == 0) return;
+
+    for (final n in _nodes.values) {
+      n.slotX -= shift;
     }
   }
 
   void _stabilizeLayout() {
     _compactSlotsPerLevel();
-    _recenterSlots();
+    _anchorToRoot(); // ✅ no avg-recenter drift
   }
 
   // -------------------------------------------------------------------
+
+  /// ✅ Add the very first/root member (no links yet)
+  FamilyNode addRoot({
+    required String name,
+    required Kind kind,
+  }) {
+    final root = createNode(
+      name: name,
+      kind: kind,
+      levelY: 0,
+      slotX: 0,
+    );
+    _stabilizeLayout();
+    notifyListeners();
+    return root;
+  }
+
+  /// ✅ When a spouse is added, attach as missing co-parent for existing children.
+  void _backfillSpouseAsCoParent({
+    required int personId,
+    required int spouseId,
+  }) {
+    final person = getNode(personId);
+    final spouse = getNode(spouseId);
+
+    // 1) spouse becomes missing parent for person's children
+    for (final childId in person.children) {
+      final (motherId, fatherId) = parentPairForPerson(childId);
+
+      if (spouse.gender == Gender.female && motherId == null) {
+        linkParentChild(parentId: spouseId, childId: childId, notify: false);
+      } else if (spouse.gender == Gender.male && fatherId == null) {
+        linkParentChild(parentId: spouseId, childId: childId, notify: false);
+      }
+    }
+
+    // 2) person becomes missing parent for spouse's children (symmetry)
+    for (final childId in spouse.children) {
+      final (motherId, fatherId) = parentPairForPerson(childId);
+
+      if (person.gender == Gender.female && motherId == null) {
+        linkParentChild(parentId: personId, childId: childId, notify: false);
+      } else if (person.gender == Gender.male && fatherId == null) {
+        linkParentChild(parentId: personId, childId: childId, notify: false);
+      }
+    }
+  }
+
+  /// ✅ Add spouse (single spouse per person for now).
+  FamilyNode? addSpouse({
+    required int personId,
+    required Kind spouseKind,
+    required String name,
+  }) {
+    final person = getNode(personId);
+
+    if (person.spouses.isNotEmpty) return null;
+    if (spouseKind.gender == person.gender) return null;
+
+    final preferLeft = spouseKind.gender == Gender.female;
+    final anchor = person.slotX + (preferLeft ? -1 : 1);
+
+    final slot = _nearestFreeSlotAtLevel(
+      levelY: person.levelY,
+      anchorSlot: anchor,
+      preferLeft: preferLeft,
+    );
+
+    final spouse = createNode(
+      name: name,
+      kind: spouseKind,
+      levelY: person.levelY,
+      slotX: slot,
+    );
+
+    linkSpouses(aId: personId, bId: spouse.id, notify: false);
+
+    // ✅ if children already exist, spouse becomes the missing co-parent
+    _backfillSpouseAsCoParent(personId: personId, spouseId: spouse.id);
+
+    _stabilizeLayout();
+    notifyListeners();
+    return spouse;
+  }
 
   FamilyNode? addParent({
     required int personId,
@@ -402,7 +526,7 @@ class FamilyTreeStore extends ChangeNotifier {
 
     linkParentChild(parentId: from.id, childId: child.id, notify: false);
 
-    final coparentId = _findCoParent(fromNodeId);
+    final coparentId = _findCoParentPreferSpouse(fromNodeId);
     if (coparentId != null) {
       linkParentChild(parentId: coparentId, childId: child.id, notify: false);
     }
@@ -442,10 +566,6 @@ class FamilyTreeLayout {
     for (final n in nodes.values) {
       pos[n.id] = Offset(n.slotX * xStep, n.levelY * yStep);
     }
-
-    // ✅ IMPORTANT:
-    // Removed "only newest snaps" pixel-based collision pushing.
-    // Overlap prevention now happens in the store via _stabilizeLayout().
 
     const double pad = 400;
     double minX = double.infinity, minY = double.infinity;
@@ -495,7 +615,6 @@ class _FamilyTreePageState extends State<FamilyTreePage> {
   void initState() {
     super.initState();
     store = FamilyTreeStore();
-    store.createNode(name: 'Alex', kind: Kind.son, levelY: 0, slotX: 0);
   }
 
   @override
@@ -534,6 +653,7 @@ class _FamilyTreePageState extends State<FamilyTreePage> {
         }
 
         final canvasSize = const Size(virtualSize, virtualSize);
+        final isEmpty = store.nodes.isEmpty;
 
         return Scaffold(
           appBar: AppBar(
@@ -551,39 +671,83 @@ class _FamilyTreePageState extends State<FamilyTreePage> {
               ),
             ],
           ),
-          body: InteractiveViewer(
-            transformationController: _tc,
-            constrained: false,
-            boundaryMargin: const EdgeInsets.all(1000000),
-            clipBehavior: Clip.none,
-            minScale: 0.02,
-            maxScale: 10.0,
-            child: SizedBox(
-              width: canvasSize.width,
-              height: canvasSize.height,
-              child: Stack(
+          body: Stack(
+            children: [
+              InteractiveViewer(
+                transformationController: _tc,
+                constrained: false,
+                boundaryMargin: const EdgeInsets.all(1000000),
                 clipBehavior: Clip.none,
-                children: [
-                  CustomPaint(
-                    size: canvasSize,
-                    painter: _ConnectorPainter(
-                      store: store,
-                      positions: layout,
-                      cardSize: cardSize,
+                minScale: 0.02,
+                maxScale: 10.0,
+                child: SizedBox(
+                  width: canvasSize.width,
+                  height: canvasSize.height,
+                  child: Stack(
+                    clipBehavior: Clip.none,
+                    children: [
+                      if (!isEmpty)
+                        CustomPaint(
+                          size: canvasSize,
+                          painter: _ConnectorPainter(
+                            store: store,
+                            positions: layout,
+                            cardSize: cardSize,
+                          ),
+                        ),
+                      for (final entry in layout.entries)
+                        _AnimatedNode(
+                          node: store.getNode(entry.key),
+                          topLeft: entry.value,
+                          size: cardSize,
+                          onTap: () => _openNodeActions(context, entry.key),
+                          onDragDelta: (delta) =>
+                              store.addManualOffset(entry.key, delta),
+                        ),
+                    ],
+                  ),
+                ),
+              ),
+              if (isEmpty)
+                Center(
+                  child: Padding(
+                    padding: const EdgeInsets.all(18),
+                    child: Material(
+                      elevation: 2,
+                      borderRadius: BorderRadius.circular(18),
+                      color: Colors.white,
+                      child: Padding(
+                        padding: const EdgeInsets.fromLTRB(18, 16, 18, 16),
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            const Icon(Icons.account_tree, size: 42),
+                            const SizedBox(height: 10),
+                            const Text(
+                              'Start your family tree',
+                              style: TextStyle(
+                                fontSize: 16,
+                                fontWeight: FontWeight.w700,
+                              ),
+                            ),
+                            const SizedBox(height: 6),
+                            Text(
+                              'Add your first member to begin.',
+                              style: TextStyle(color: Colors.grey.shade700),
+                            ),
+                            const SizedBox(height: 14),
+                            FilledButton.icon(
+                              onPressed: () => _addFirstMemberFlow(context),
+                              icon: const Icon(Icons.person_add),
+                              label: const Text('Add First Member'),
+                            ),
+                          ],
+                        ),
+                      ),
                     ),
                   ),
-                  for (final entry in layout.entries)
-                    _AnimatedNode(
-                      node: store.getNode(entry.key),
-                      topLeft: entry.value,
-                      size: cardSize,
-                      onTap: () => _openNodeActions(context, entry.key),
-                      onDragDelta: (delta) =>
-                          store.addManualOffset(entry.key, delta),
-                    ),
-                ],
-              ),
-            ),
+                ),
+            ],
           ),
         );
       },
@@ -626,6 +790,60 @@ class _FamilyTreePageState extends State<FamilyTreePage> {
       ..translate(-bounds.center.dx, -bounds.center.dy);
   }
 
+  Future<void> _addFirstMemberFlow(BuildContext context) async {
+    final chosen = await showModalBottomSheet<Kind>(
+      context: context,
+      showDragHandle: true,
+      builder: (ctx) {
+        return SafeArea(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const SizedBox(height: 6),
+              const Text('Select Member Type',
+                  style: TextStyle(fontWeight: FontWeight.w600)),
+              const SizedBox(height: 8),
+              for (final k
+                  in const [Kind.mother, Kind.father, Kind.son, Kind.daughter])
+                ListTile(
+                  leading: Icon(k.icon),
+                  title: Text(k.label),
+                  onTap: () => Navigator.pop(ctx, k),
+                ),
+              const SizedBox(height: 12),
+            ],
+          ),
+        );
+      },
+    );
+
+    if (chosen == null) return;
+
+    final name = await _promptText(
+      context,
+      title: '${chosen.label} Name',
+      initial: 'New ${chosen.label}',
+    );
+    if (name == null) return;
+
+    store.addRoot(name: name, kind: chosen);
+
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      final layoutRaw = FamilyTreeLayout(
+        store: store,
+        cardSize: cardSize,
+        hGap: hGap,
+        vGap: vGap,
+      ).compute();
+      final origin = const Offset(virtualSize / 2, virtualSize / 2);
+      final layout = <int, Offset>{
+        for (final e in layoutRaw.entries) e.key: e.value + origin,
+      };
+      _fitToScreen(_computeBounds(layout));
+    });
+  }
+
   Future<void> _openNodeActions(BuildContext context, int nodeId) async {
     final node = store.getNode(nodeId);
 
@@ -665,6 +883,14 @@ class _FamilyTreePageState extends State<FamilyTreePage> {
                   },
                 ),
                 ListTile(
+                  leading: const Icon(Icons.favorite),
+                  title: const Text('Add Spouse'),
+                  onTap: () async {
+                    Navigator.pop(ctx);
+                    await _addSpouseFlow(context, personId: nodeId);
+                  },
+                ),
+                ListTile(
                   leading: const Icon(Icons.arrow_upward),
                   title: const Text('Add Parent'),
                   onTap: () async {
@@ -686,6 +912,63 @@ class _FamilyTreePageState extends State<FamilyTreePage> {
         );
       },
     );
+  }
+
+  Future<void> _addSpouseFlow(BuildContext context,
+      {required int personId}) async {
+    final person = store.getNode(personId);
+
+    if (person.spouses.isNotEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('${person.name} already has a spouse.')),
+      );
+      return;
+    }
+
+    final options = store.allowedSpouseKindsFor(person.kind);
+
+    final chosen = await showModalBottomSheet<Kind>(
+      context: context,
+      showDragHandle: true,
+      builder: (ctx) {
+        return SafeArea(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const SizedBox(height: 6),
+              const Text('Select Spouse Type',
+                  style: TextStyle(fontWeight: FontWeight.w600)),
+              const SizedBox(height: 8),
+              for (final k in options)
+                ListTile(
+                  leading: Icon(k.icon),
+                  title: Text(k.label),
+                  onTap: () => Navigator.pop(ctx, k),
+                ),
+              const SizedBox(height: 12),
+            ],
+          ),
+        );
+      },
+    );
+
+    if (chosen == null) return;
+
+    final name = await _promptText(
+      context,
+      title: '${chosen.label} Name',
+      initial: 'New ${chosen.label}',
+    );
+    if (name == null) return;
+
+    final added =
+        store.addSpouse(personId: personId, spouseKind: chosen, name: name);
+
+    if (added == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Could not add spouse.')),
+      );
+    }
   }
 
   Future<void> _addParentFlow(BuildContext context,
@@ -933,6 +1216,12 @@ class _ConnectorPainter extends CustomPainter {
       ..style = PaintingStyle.stroke
       ..strokeCap = StrokeCap.round;
 
+    final spousePaint = Paint()
+      ..color = const Color(0xFFB9C0CC)
+      ..strokeWidth = 1.2
+      ..style = PaintingStyle.stroke
+      ..strokeCap = StrokeCap.round;
+
     Offset topCenterOf(int nodeId) {
       final p = positions[nodeId]!;
       return Offset(p.dx + cardSize.width / 2, p.dy);
@@ -943,7 +1232,11 @@ class _ConnectorPainter extends CustomPainter {
       return Offset(p.dx + cardSize.width / 2, p.dy + cardSize.height);
     }
 
+    // -----------------------
+    // Build parent-groups FIRST (and track which couples already have children)
+    // -----------------------
     final Map<String, _Group> groups = {};
+    final Set<String> couplesWithChildren = {};
 
     for (final child in store.nodes.values) {
       if (child.parents.isEmpty) continue;
@@ -964,10 +1257,67 @@ class _ConnectorPainter extends CustomPainter {
       if (!parentsHavePos) continue;
 
       final key = parentIds.join('_');
+      couplesWithChildren.add(key); // ✅ prevents double spouse line
+
       groups.putIfAbsent(key, () => _Group(parentIds: parentIds));
       groups[key]!.childIds.add(child.id);
     }
 
+    // -----------------------
+    // Spouse connectors (ONLY if they do NOT already have children together)
+    // -----------------------
+    final drawnSpousePairs = <String>{};
+
+    for (final a in store.nodes.values) {
+      if (!positions.containsKey(a.id)) continue;
+
+      for (final bId in a.spouses) {
+        if (!positions.containsKey(bId)) continue;
+
+        final lo = min(a.id, bId);
+        final hi = max(a.id, bId);
+
+        final pairKey = '${lo}_$hi';
+        if (drawnSpousePairs.contains(pairKey)) continue;
+        drawnSpousePairs.add(pairKey);
+
+        if (couplesWithChildren.contains(pairKey)) continue;
+
+        final p1 = bottomCenterOf(a.id);
+        final p2 = bottomCenterOf(bId);
+
+        const double coupleGap = 18;
+        final coupleY = max(p1.dy, p2.dy) + coupleGap;
+
+        final leftX = min(p1.dx, p2.dx);
+        final rightX = max(p1.dx, p2.dx);
+        final midX = (p1.dx + p2.dx) / 2;
+
+        canvas.drawLine(p1, Offset(p1.dx, coupleY), spousePaint);
+        canvas.drawLine(p2, Offset(p2.dx, coupleY), spousePaint);
+        canvas.drawLine(
+          Offset(leftX, coupleY),
+          Offset(rightX, coupleY),
+          spousePaint,
+        );
+
+        final heart = TextPainter(
+          text: const TextSpan(
+            text: '❤',
+            style: TextStyle(fontSize: 12, color: Color(0xFFB9C0CC)),
+          ),
+          textDirection: TextDirection.ltr,
+        )..layout();
+        heart.paint(
+          canvas,
+          Offset(midX - heart.width / 2, coupleY - heart.height / 2),
+        );
+      }
+    }
+
+    // -----------------------
+    // Parent -> children grouped connectors
+    // -----------------------
     for (final g in groups.values) {
       final childTops = <Offset>[];
       for (final cid in g.childIds) {
