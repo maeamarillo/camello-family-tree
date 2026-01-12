@@ -73,7 +73,7 @@ class _LoginPageState extends State<LoginPage> {
   void popLogin() {
     Navigator.pushReplacement(
       context,
-      MaterialPageRoute(builder: (context) => const DashboardPage()),
+      MaterialPageRoute(builder: (context) => DashboardPage()),
     );
   }
 

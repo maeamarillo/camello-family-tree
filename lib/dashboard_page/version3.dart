@@ -128,8 +128,7 @@ class FamilyTreeStore extends ChangeNotifier {
   }
 
   void renameNode(int id, String newName) {
-    getNode(id).name =
-        newName.trim().isEmpty ? getNode(id).name : newName.trim();
+    getNode(id).name = newName.trim().isEmpty ? getNode(id).name : newName.trim();
     notifyListeners();
   }
 
@@ -333,8 +332,7 @@ class FamilyTreeLayout {
     }
 
     for (final entry in byLevel.entries) {
-      final ids = entry.value
-        ..sort((a, b) => pos[a]!.dx.compareTo(pos[b]!.dx));
+      final ids = entry.value..sort((a, b) => pos[a]!.dx.compareTo(pos[b]!.dx));
 
       for (int i = 1; i < ids.length; i++) {
         final a = ids[i - 1];
@@ -430,10 +428,8 @@ class _FamilyTreePageState extends State<FamilyTreePage> {
         const double verticalPadding = 1000;
 
         final canvasSize = Size(
-          max(MediaQuery.of(context).size.width * 2,
-              bounds.width + horizontalPadding),
-          max(MediaQuery.of(context).size.height * 2,
-              bounds.height + verticalPadding),
+          max(MediaQuery.of(context).size.width * 2, bounds.width + horizontalPadding),
+          max(MediaQuery.of(context).size.height * 2, bounds.height + verticalPadding),
         );
 
         return Scaffold(
@@ -477,8 +473,7 @@ class _FamilyTreePageState extends State<FamilyTreePage> {
                       topLeft: entry.value,
                       size: cardSize,
                       onTap: () => _openNodeActions(context, entry.key),
-                      onDragDelta: (delta) =>
-                          store.addManualOffset(entry.key, delta),
+                      onDragDelta: (delta) => store.addManualOffset(entry.key, delta),
                     ),
                 ],
               ),
@@ -515,9 +510,11 @@ class _FamilyTreePageState extends State<FamilyTreePage> {
 
   void _fitToScreen(Rect bounds) {
     final screenSize = MediaQuery.of(context).size;
-    final scale =
-        min(screenSize.width / bounds.width, screenSize.height / bounds.height) *
-            0.8;
+    final scale = min(
+          screenSize.width / bounds.width,
+          screenSize.height / bounds.height,
+        ) *
+        0.8;
 
     _tc.value = Matrix4.identity()
       ..translate(screenSize.width / 2, screenSize.height / 2)
@@ -546,8 +543,7 @@ class _FamilyTreePageState extends State<FamilyTreePage> {
                     Expanded(
                       child: Text(
                         node.name,
-                        style: const TextStyle(
-                            fontSize: 18, fontWeight: FontWeight.w600),
+                        style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w600),
                       ),
                     ),
                   ],
@@ -558,8 +554,7 @@ class _FamilyTreePageState extends State<FamilyTreePage> {
                   title: const Text('Edit Name'),
                   onTap: () async {
                     Navigator.pop(ctx);
-                    final name = await _promptText(context,
-                        title: 'Edit Name', initial: node.name);
+                    final name = await _promptText(context, title: 'Edit Name', initial: node.name);
                     if (name != null) store.renameNode(nodeId, name);
                   },
                 ),
@@ -588,8 +583,7 @@ class _FamilyTreePageState extends State<FamilyTreePage> {
   }
 
   /// ✅ Only shows missing parent options based on existing parent GENDER.
-  Future<void> _addParentFlow(BuildContext context,
-      {required int personId}) async {
+  Future<void> _addParentFlow(BuildContext context, {required int personId}) async {
     final person = store.getNode(personId);
     final (motherId, fatherId) = store.parentPairForPerson(personId);
 
@@ -600,9 +594,7 @@ class _FamilyTreePageState extends State<FamilyTreePage> {
 
     if (options.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-            content:
-                Text('${person.name} already has a Mother and a Father.')),
+        SnackBar(content: Text('${person.name} already has a Mother and a Father.')),
       );
       return;
     }
@@ -616,8 +608,7 @@ class _FamilyTreePageState extends State<FamilyTreePage> {
             mainAxisSize: MainAxisSize.min,
             children: [
               const SizedBox(height: 6),
-              const Text('Select Missing Parent',
-                  style: TextStyle(fontWeight: FontWeight.w600)),
+              const Text('Select Missing Parent', style: TextStyle(fontWeight: FontWeight.w600)),
               const SizedBox(height: 8),
               for (final k in options)
                 ListTile(
@@ -634,12 +625,10 @@ class _FamilyTreePageState extends State<FamilyTreePage> {
 
     if (chosen == null) return;
 
-    final name = await _promptText(context,
-        title: '${chosen.label} Name', initial: 'New ${chosen.label}');
+    final name = await _promptText(context, title: '${chosen.label} Name', initial: 'New ${chosen.label}');
     if (name == null) return;
 
-    final added =
-        store.addParent(personId: personId, parentKind: chosen, name: name);
+    final added = store.addParent(personId: personId, parentKind: chosen, name: name);
     if (added == null) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('Could not add ${chosen.label} (already exists).')),
@@ -648,8 +637,7 @@ class _FamilyTreePageState extends State<FamilyTreePage> {
   }
 
   /// ✅ Child is always Son or Daughter (gender always known)
-  Future<void> _addChildFlow(BuildContext context,
-      {required int fromNodeId}) async {
+  Future<void> _addChildFlow(BuildContext context, {required int fromNodeId}) async {
     final chosen = await showModalBottomSheet<Kind>(
       context: context,
       showDragHandle: true,
@@ -659,8 +647,7 @@ class _FamilyTreePageState extends State<FamilyTreePage> {
             mainAxisSize: MainAxisSize.min,
             children: [
               const SizedBox(height: 6),
-              const Text('Select Child',
-                  style: TextStyle(fontWeight: FontWeight.w600)),
+              const Text('Select Child', style: TextStyle(fontWeight: FontWeight.w600)),
               const SizedBox(height: 8),
               for (final k in const [Kind.son, Kind.daughter])
                 ListTile(
@@ -677,15 +664,13 @@ class _FamilyTreePageState extends State<FamilyTreePage> {
 
     if (chosen == null) return;
 
-    final name = await _promptText(context,
-        title: '${chosen.label} Name', initial: 'New ${chosen.label}');
+    final name = await _promptText(context, title: '${chosen.label} Name', initial: 'New ${chosen.label}');
     if (name == null) return;
 
     store.addChild(fromNodeId: fromNodeId, name: name, childKind: chosen);
   }
 
-  Future<String?> _promptText(BuildContext context,
-      {required String title, required String initial}) async {
+  Future<String?> _promptText(BuildContext context, {required String title, required String initial}) async {
     final c = TextEditingController(text: initial);
 
     return showDialog<String>(
@@ -703,12 +688,8 @@ class _FamilyTreePageState extends State<FamilyTreePage> {
             onSubmitted: (_) => Navigator.pop(ctx, c.text),
           ),
           actions: [
-            TextButton(
-                onPressed: () => Navigator.pop(ctx),
-                child: const Text('Cancel')),
-            FilledButton(
-                onPressed: () => Navigator.pop(ctx, c.text),
-                child: const Text('Save')),
+            TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
+            FilledButton(onPressed: () => Navigator.pop(ctx, c.text), child: const Text('Save')),
           ],
         );
       },
@@ -801,8 +782,7 @@ class _MemberCard extends StatelessWidget {
                     const SizedBox(height: 4),
                     Text(
                       node.kind.label,
-                      style:
-                          TextStyle(color: Colors.grey.shade700, fontSize: 12),
+                      style: TextStyle(color: Colors.grey.shade700, fontSize: 12),
                     ),
                   ],
                 ),
@@ -815,10 +795,7 @@ class _MemberCard extends StatelessWidget {
   }
 }
 
-/// ✅ Connector painter (FIXED):
-/// - Groups children by their parent set (1-parent or 2-parent couple).
-/// - Draws a couple line when 2 parents exist, then ONE shared drop to a bus line.
-/// - Bus line ALWAYS includes the parent/couple X so lines actually connect.
+/// Draws thin connector lines (no arrows).
 class _ConnectorPainter extends CustomPainter {
   _ConnectorPainter({
     required this.store,
@@ -835,139 +812,36 @@ class _ConnectorPainter extends CustomPainter {
     final paint = Paint()
       ..color = const Color(0xFFB9C0CC)
       ..strokeWidth = 1.2
-      ..style = PaintingStyle.stroke
-      ..strokeCap = StrokeCap.round;
+      ..style = PaintingStyle.stroke;
 
-    Offset topCenterOf(int nodeId) {
-      final p = positions[nodeId]!;
-      return Offset(p.dx + cardSize.width / 2, p.dy);
-    }
+    for (final n in store.nodes.values) {
+      final parentPos = positions[n.id];
+      if (parentPos == null) continue;
 
-    Offset bottomCenterOf(int nodeId) {
-      final p = positions[nodeId]!;
-      return Offset(p.dx + cardSize.width / 2, p.dy + cardSize.height);
-    }
+      final parentBottom = Offset(
+        parentPos.dx + cardSize.width / 2,
+        parentPos.dy + cardSize.height,
+      );
 
-    // Group children by parent set (so couples draw one shared connector)
-    final Map<String, _Group> groups = {};
+      for (final childId in n.children) {
+        final childPos = positions[childId];
+        if (childPos == null) continue;
 
-    for (final child in store.nodes.values) {
-      if (child.parents.isEmpty) continue;
+        final childTop = Offset(
+          childPos.dx + cardSize.width / 2,
+          childPos.dy,
+        );
 
-      final parentIds = child.parents.take(2).toList()..sort();
-      final key = parentIds.join('_');
-
-      final childPos = positions[child.id];
-      bool parentsHavePos = true;
-      for (final pid in parentIds) {
-        if (!positions.containsKey(pid)) parentsHavePos = false;
-      }
-      if (childPos == null || !parentsHavePos) continue;
-
-      groups.putIfAbsent(key, () => _Group(parentIds: parentIds));
-      groups[key]!.childIds.add(child.id);
-    }
-
-    for (final g in groups.values) {
-      final childTops = <Offset>[];
-      for (final cid in g.childIds) {
-        if (!positions.containsKey(cid)) continue;
-        childTops.add(topCenterOf(cid));
-      }
-      if (childTops.isEmpty) continue;
-
-      final parentBottoms = <Offset>[];
-      for (final pid in g.parentIds) {
-        if (!positions.containsKey(pid)) continue;
-        parentBottoms.add(bottomCenterOf(pid));
-      }
-      if (parentBottoms.isEmpty) continue;
-
-      final parentsBottomY = parentBottoms.map((p) => p.dy).reduce(max);
-      final minChildTopY = childTops.map((e) => e.dy).reduce(min);
-      final busY = (parentsBottomY + minChildTopY) / 2;
-
-      double minX = childTops.map((e) => e.dx).reduce(min);
-      double maxX = childTops.map((e) => e.dx).reduce(max);
-
-      final isCouple = parentBottoms.length >= 2;
-      final anchorX = isCouple
-          ? (parentBottoms[0].dx + parentBottoms[1].dx) / 2
-          : parentBottoms.first.dx;
-
-      minX = min(minX, anchorX);
-      maxX = max(maxX, anchorX);
-
-      // Single-child case
-      if (childTops.length == 1) {
-        final childTop = childTops.first;
-
-        if (!isCouple) {
-          final pb = parentBottoms.first;
-          final midY = (pb.dy + childTop.dy) / 2;
-          canvas.drawLine(pb, Offset(pb.dx, midY), paint);
-          canvas.drawLine(Offset(pb.dx, midY), Offset(childTop.dx, midY), paint);
-          canvas.drawLine(Offset(childTop.dx, midY), childTop, paint);
-        } else {
-          final p1 = parentBottoms[0];
-          final p2 = parentBottoms[1];
-          final coupleY = p1.dy + (busY - p1.dy) * 0.35;
-          final midX = (p1.dx + p2.dx) / 2;
-
-          canvas.drawLine(p1, Offset(p1.dx, coupleY), paint);
-          canvas.drawLine(p2, Offset(p2.dx, coupleY), paint);
-          canvas.drawLine(
-            Offset(min(p1.dx, p2.dx), coupleY),
-            Offset(max(p1.dx, p2.dx), coupleY),
-            paint,
-          );
-
-          final midY = (coupleY + childTop.dy) / 2;
-          canvas.drawLine(Offset(midX, coupleY), Offset(midX, midY), paint);
-          canvas.drawLine(Offset(midX, midY), Offset(childTop.dx, midY), paint);
-          canvas.drawLine(Offset(childTop.dx, midY), childTop, paint);
-        }
-        continue;
-      }
-
-      // Multi-child case
-      if (!isCouple) {
-        final pb = parentBottoms.first;
-        canvas.drawLine(pb, Offset(pb.dx, busY), paint);
-        canvas.drawLine(Offset(minX, busY), Offset(maxX, busY), paint);
-      } else {
-        final p1 = parentBottoms[0];
-        final p2 = parentBottoms[1];
-
-        final coupleY = p1.dy + (busY - p1.dy) * 0.35;
-        final leftX = min(p1.dx, p2.dx);
-        final rightX = max(p1.dx, p2.dx);
-        final midX = (p1.dx + p2.dx) / 2;
-
-        canvas.drawLine(p1, Offset(p1.dx, coupleY), paint);
-        canvas.drawLine(p2, Offset(p2.dx, coupleY), paint);
-        canvas.drawLine(Offset(leftX, coupleY), Offset(rightX, coupleY), paint);
-
-        canvas.drawLine(Offset(midX, coupleY), Offset(midX, busY), paint);
-        canvas.drawLine(Offset(minX, busY), Offset(maxX, busY), paint);
-      }
-
-      for (final ct in childTops) {
-        canvas.drawLine(Offset(ct.dx, busY), ct, paint);
+        final midY = (parentBottom.dy + childTop.dy) / 2;
+        canvas.drawLine(parentBottom, Offset(parentBottom.dx, midY), paint);
+        canvas.drawLine(Offset(parentBottom.dx, midY), Offset(childTop.dx, midY), paint);
+        canvas.drawLine(Offset(childTop.dx, midY), childTop, paint);
       }
     }
   }
 
   @override
   bool shouldRepaint(covariant _ConnectorPainter oldDelegate) {
-    return oldDelegate.positions != positions ||
-        oldDelegate.store != store ||
-        oldDelegate.cardSize != cardSize;
+    return oldDelegate.positions != positions || oldDelegate.store != store;
   }
-}
-
-class _Group {
-  _Group({required this.parentIds});
-  final List<int> parentIds;
-  final List<int> childIds = [];
 }
