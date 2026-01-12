@@ -114,7 +114,12 @@ class FamilyTreeStore extends ChangeNotifier {
   FamilyNode getNode(int id) => _nodes[id]!;
 
   /// Ensures parent<->child linkage is always bi-directional.
-  void linkParentChild({required int parentId, required int childId}) {
+  /// ✅ notify can be disabled to avoid mid-operation rebuilds.
+  void linkParentChild({
+    required int parentId,
+    required int childId,
+    bool notify = true,
+  }) {
     if (parentId == childId) return;
     if (!_nodes.containsKey(parentId) || !_nodes.containsKey(childId)) return;
 
@@ -124,7 +129,7 @@ class FamilyTreeStore extends ChangeNotifier {
     parent.children.add(childId);
     child.parents.add(parentId);
 
-    notifyListeners();
+    if (notify) notifyListeners();
   }
 
   void renameNode(int id, String newName) {
@@ -159,22 +164,71 @@ class FamilyTreeStore extends ChangeNotifier {
     return null;
   }
 
-  /// ✅ Next slot for a new child: append right (old nodes never shift).
-  double _nextChildSlot(int parentId) {
-    final parent = getNode(parentId);
-    if (parent.children.isEmpty) return parent.slotX;
-
-    double maxSlot = -double.infinity;
-    for (final cid in parent.children) {
-      maxSlot = max(maxSlot, getNode(cid).slotX);
+  /// ✅ NEW: Find nearest free slot at a given level, centered around an anchor slot.
+  /// If preferLeft=true, it searches left first: 0, -1, +1, -2, +2...
+  /// Else it searches right first: 0, +1, -1, +2, -2...
+  double _nearestFreeSlotAtLevel({
+    required int levelY,
+    required double anchorSlot,
+    required bool preferLeft,
+  }) {
+    final taken = <int>{};
+    for (final n in _nodes.values) {
+      if (n.levelY == levelY) {
+        taken.add(n.slotX.round());
+      }
     }
-    return maxSlot + 1;
+
+    final base = anchorSlot.round();
+
+    for (int d = 0; d < 500; d++) {
+      final left = base - d;
+      final right = base + d;
+
+      if (d == 0) {
+        if (!taken.contains(base)) return base.toDouble();
+        continue;
+      }
+
+      if (preferLeft) {
+        if (!taken.contains(left)) return left.toDouble();
+        if (!taken.contains(right)) return right.toDouble();
+      } else {
+        if (!taken.contains(right)) return right.toDouble();
+        if (!taken.contains(left)) return left.toDouble();
+      }
+    }
+
+    return (base + 1).toDouble();
   }
 
-  /// ✅ Slot for a new parent: align as a pair when other parent exists.
+  double _nextChildSlotSmart(int fromNodeId) {
+    final from = getNode(fromNodeId);
+    final childLevel = from.levelY + 1;
+
+    final coparentId = _findCoParent(fromNodeId);
+    if (coparentId == null) {
+      return _nearestFreeSlotAtLevel(
+        levelY: childLevel,
+        anchorSlot: from.slotX,
+        preferLeft: true,
+      );
+    }
+
+    final cp = getNode(coparentId);
+    final anchor = (from.slotX + cp.slotX) / 2;
+    final preferLeft = from.slotX <= cp.slotX;
+
+    return _nearestFreeSlotAtLevel(
+      levelY: childLevel,
+      anchorSlot: anchor,
+      preferLeft: preferLeft,
+    );
+  }
+
   double _newParentSlot({
     required int personId,
-    required Kind parentKind, // mother/father only
+    required Kind parentKind,
     required int? existingOtherParentId,
   }) {
     final person = getNode(personId);
@@ -189,11 +243,9 @@ class FamilyTreeStore extends ChangeNotifier {
     }
   }
 
-  /// ✅ When adding the missing parent, auto-link them to the other parent's existing children
-  /// that still lack THIS role slot (female/male).
   void _linkNewParentToSharedChildren({
     required int newParentId,
-    required Kind newParentKind, // mother/father
+    required Kind newParentKind,
     required int otherParentId,
   }) {
     final otherParent = getNode(otherParentId);
@@ -208,14 +260,13 @@ class FamilyTreeStore extends ChangeNotifier {
       if (newGender == Gender.female && motherId != null) continue;
       if (newGender == Gender.male && fatherId != null) continue;
 
-      linkParentChild(parentId: newParentId, childId: childId);
+      linkParentChild(parentId: newParentId, childId: childId, notify: false);
     }
   }
 
-  /// Adds a parent (mother/father) to ANY person.
   FamilyNode? addParent({
     required int personId,
-    required Kind parentKind, // must be mother/father
+    required Kind parentKind,
     required String name,
   }) {
     if (parentKind != Kind.mother && parentKind != Kind.father) return null;
@@ -238,67 +289,56 @@ class FamilyTreeStore extends ChangeNotifier {
       ),
     );
 
-    // Link to the selected person
-    linkParentChild(parentId: parent.id, childId: personId);
+    linkParentChild(parentId: parent.id, childId: personId, notify: false);
 
-    // ✅ If this completes a couple, connect new parent to the other parent's existing children
     if (otherParentId != null) {
       _linkNewParentToSharedChildren(
         newParentId: parent.id,
         newParentKind: parentKind,
         otherParentId: otherParentId,
       );
-      notifyListeners();
     }
 
+    notifyListeners();
     return parent;
   }
 
-  /// Adds a child (son/daughter) from ANY node.
-  /// Auto-links the new child to BOTH parents if a co-parent exists.
   FamilyNode addChild({
     required int fromNodeId,
     required String name,
-    required Kind childKind, // son/daughter
+    required Kind childKind,
   }) {
     if (childKind != Kind.son && childKind != Kind.daughter) {
       throw ArgumentError('childKind must be Kind.son or Kind.daughter');
     }
 
     final from = getNode(fromNodeId);
+    final slot = _nextChildSlotSmart(fromNodeId);
 
     final child = createNode(
       name: name,
       kind: childKind,
       levelY: from.levelY + 1,
-      slotX: _nextChildSlot(fromNodeId),
+      slotX: slot,
     );
 
-    linkParentChild(parentId: from.id, childId: child.id);
+    linkParentChild(parentId: from.id, childId: child.id, notify: false);
 
     final coparentId = _findCoParent(fromNodeId);
     if (coparentId != null) {
-      linkParentChild(parentId: coparentId, childId: child.id);
-
-      // Optional: center new child between parents (only affects the new child)
-      final cp = getNode(coparentId);
-      child.slotX = (from.slotX + cp.slotX) / 2;
-      notifyListeners();
+      linkParentChild(parentId: coparentId, childId: child.id, notify: false);
     }
 
+    notifyListeners();
     return child;
   }
 
-  /// Nudges a node manually (used after dragging).
   void addManualOffset(int nodeId, Offset delta) {
     getNode(nodeId).manualOffset += delta;
     notifyListeners();
   }
 }
 
-/// ✅ Layout uses stored slotX + levelY.
-/// ✅ Only newest node is allowed to "snap" away from overlaps.
-/// ✅ Then we translate everything so no node has negative left/top (Stack can't show negatives).
 class FamilyTreeLayout {
   FamilyTreeLayout({
     required this.store,
@@ -320,12 +360,10 @@ class FamilyTreeLayout {
     final xStep = cardSize.width + hGap;
     final yStep = cardSize.height + vGap;
 
-    // 1) Base positions from stable slots.
     for (final n in nodes.values) {
       pos[n.id] = Offset(n.slotX * xStep, n.levelY * yStep);
     }
 
-    // 2) Overlap avoidance per level (ONLY shift the newest node).
     final newest = store.lastAddedId;
     final byLevel = <int, List<int>>{};
     for (final n in nodes.values) {
@@ -347,19 +385,22 @@ class FamilyTreeLayout {
         if (pb.dx < minX) {
           if (newest == b) {
             pos[b] = Offset(minX, pb.dy);
+
+            final n = store.getNode(b);
+            n.slotX = minX / xStep;
+            n.manualOffset = Offset.zero;
           } else if (newest == a) {
-            pos[a] = Offset(pa.dx + (minX - pb.dx), pa.dy);
+            final newAx = pa.dx + (minX - pb.dx);
+            pos[a] = Offset(newAx, pa.dy);
+
+            final n = store.getNode(a);
+            n.slotX = newAx / xStep;
+            n.manualOffset = Offset.zero;
           }
         }
       }
     }
 
-    // 3) Apply manual offsets (drag nudges).
-    for (final n in nodes.values) {
-      pos[n.id] = pos[n.id]! + n.manualOffset;
-    }
-
-    // 4) Translate so nothing is negative.
     const double pad = 400;
     double minX = double.infinity, minY = double.infinity;
     for (final p in pos.values) {
@@ -374,6 +415,10 @@ class FamilyTreeLayout {
       for (final id in pos.keys) {
         pos[id] = pos[id]! + Offset(shiftX, shiftY);
       }
+    }
+
+    for (final n in nodes.values) {
+      pos[n.id] = pos[n.id]! + n.manualOffset;
     }
 
     return pos;
@@ -394,14 +439,16 @@ class _FamilyTreePageState extends State<FamilyTreePage> {
   static const double hGap = 40;
   static const double vGap = 70;
 
+  /// ✅ Big virtual plane
+  static const double virtualSize = 100000;
+
   final TransformationController _tc = TransformationController();
+  bool _didInitialCenter = false;
 
   @override
   void initState() {
     super.initState();
     store = FamilyTreeStore();
-
-    // ✅ Seed node MUST be Son or Daughter (gender always known)
     store.createNode(name: 'Alex', kind: Kind.son, levelY: 0, slotX: 0);
   }
 
@@ -417,24 +464,30 @@ class _FamilyTreePageState extends State<FamilyTreePage> {
     return AnimatedBuilder(
       animation: store,
       builder: (context, _) {
-        final layout = FamilyTreeLayout(
+        final layoutRaw = FamilyTreeLayout(
           store: store,
           cardSize: cardSize,
           hGap: hGap,
           vGap: vGap,
         ).compute();
 
+        // ✅ center world inside the virtual plane
+        final origin = const Offset(virtualSize / 2, virtualSize / 2);
+        final layout = <int, Offset>{
+          for (final e in layoutRaw.entries) e.key: e.value + origin,
+        };
+
         final bounds = _computeBounds(layout);
 
-        const double horizontalPadding = 1000;
-        const double verticalPadding = 1000;
+        if (!_didInitialCenter && layout.isNotEmpty) {
+          _didInitialCenter = true;
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            if (!mounted) return;
+            _fitToScreen(bounds);
+          });
+        }
 
-        final canvasSize = Size(
-          max(MediaQuery.of(context).size.width * 2,
-              bounds.width + horizontalPadding),
-          max(MediaQuery.of(context).size.height * 2,
-              bounds.height + verticalPadding),
-        );
+        final canvasSize = const Size(virtualSize, virtualSize);
 
         return Scaffold(
           appBar: AppBar(
@@ -442,7 +495,7 @@ class _FamilyTreePageState extends State<FamilyTreePage> {
             actions: [
               IconButton(
                 tooltip: 'Reset view',
-                onPressed: () => _tc.value = Matrix4.identity(),
+                onPressed: () => _fitToScreen(bounds), // ✅ re-center (no cut)
                 icon: const Icon(Icons.center_focus_strong),
               ),
               IconButton(
@@ -454,14 +507,16 @@ class _FamilyTreePageState extends State<FamilyTreePage> {
           ),
           body: InteractiveViewer(
             transformationController: _tc,
-            minScale: 0.05,
-            maxScale: 5.0,
             constrained: false,
-            boundaryMargin: const EdgeInsets.all(1000),
+            boundaryMargin: const EdgeInsets.all(1000000), // ✅ huge finite margin
+            clipBehavior: Clip.none, // ✅ stop clipping
+            minScale: 0.02,
+            maxScale: 10.0,
             child: SizedBox(
               width: canvasSize.width,
               height: canvasSize.height,
               child: Stack(
+                clipBehavior: Clip.none,
                 children: [
                   CustomPaint(
                     size: canvasSize,
@@ -587,7 +642,6 @@ class _FamilyTreePageState extends State<FamilyTreePage> {
     );
   }
 
-  /// ✅ Only shows missing parent options based on existing parent GENDER.
   Future<void> _addParentFlow(BuildContext context,
       {required int personId}) async {
     final person = store.getNode(personId);
@@ -642,12 +696,12 @@ class _FamilyTreePageState extends State<FamilyTreePage> {
         store.addParent(personId: personId, parentKind: chosen, name: name);
     if (added == null) {
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Could not add ${chosen.label} (already exists).')),
+        SnackBar(
+            content: Text('Could not add ${chosen.label} (already exists).')),
       );
     }
   }
 
-  /// ✅ Child is always Son or Daughter (gender always known)
   Future<void> _addChildFlow(BuildContext context,
       {required int fromNodeId}) async {
     final chosen = await showModalBottomSheet<Kind>(
@@ -756,7 +810,6 @@ class _AnimatedNodeState extends State<_AnimatedNode> {
 
 class _MemberCard extends StatelessWidget {
   const _MemberCard({required this.node});
-
   final FamilyNode node;
 
   @override
@@ -815,10 +868,6 @@ class _MemberCard extends StatelessWidget {
   }
 }
 
-/// ✅ Connector painter (FIXED):
-/// - Groups children by their parent set (1-parent or 2-parent couple).
-/// - Draws a couple line when 2 parents exist, then ONE shared drop to a bus line.
-/// - Bus line ALWAYS includes the parent/couple X so lines actually connect.
 class _ConnectorPainter extends CustomPainter {
   _ConnectorPainter({
     required this.store,
@@ -848,22 +897,27 @@ class _ConnectorPainter extends CustomPainter {
       return Offset(p.dx + cardSize.width / 2, p.dy + cardSize.height);
     }
 
-    // Group children by parent set (so couples draw one shared connector)
     final Map<String, _Group> groups = {};
 
     for (final child in store.nodes.values) {
       if (child.parents.isEmpty) continue;
+      if (!positions.containsKey(child.id)) continue;
 
-      final parentIds = child.parents.take(2).toList()..sort();
-      final key = parentIds.join('_');
+      final (motherId, fatherId) = store.parentPairForPerson(child.id);
+      final parentIds = <int>[
+        if (motherId != null) motherId,
+        if (fatherId != null) fatherId,
+      ]..sort();
 
-      final childPos = positions[child.id];
+      if (parentIds.isEmpty) continue;
+
       bool parentsHavePos = true;
       for (final pid in parentIds) {
         if (!positions.containsKey(pid)) parentsHavePos = false;
       }
-      if (childPos == null || !parentsHavePos) continue;
+      if (!parentsHavePos) continue;
 
+      final key = parentIds.join('_');
       groups.putIfAbsent(key, () => _Group(parentIds: parentIds));
       groups[key]!.childIds.add(child.id);
     }
@@ -898,7 +952,6 @@ class _ConnectorPainter extends CustomPainter {
       minX = min(minX, anchorX);
       maxX = max(maxX, anchorX);
 
-      // Single-child case
       if (childTops.length == 1) {
         final childTop = childTops.first;
 
@@ -930,7 +983,6 @@ class _ConnectorPainter extends CustomPainter {
         continue;
       }
 
-      // Multi-child case
       if (!isCouple) {
         final pb = parentBottoms.first;
         canvas.drawLine(pb, Offset(pb.dx, busY), paint);
