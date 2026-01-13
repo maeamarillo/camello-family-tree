@@ -172,6 +172,18 @@ class FamilyTreeStore extends ChangeNotifier {
     return (mother, father);
   }
 
+  /// ✅ NEW: true if this person already has a co-parent via any shared child.
+  bool hasCoParentViaChildren(int personId) {
+    final person = getNode(personId);
+    for (final childId in person.children) {
+      final child = getNode(childId);
+      for (final pid in child.parents) {
+        if (pid != personId) return true;
+      }
+    }
+    return false;
+  }
+
   /// Finds a co-parent for `from` (based on any shared existing child).
   int? _findCoParentBySharedChild(int fromNodeId) {
     final from = getNode(fromNodeId);
@@ -208,13 +220,11 @@ class FamilyTreeStore extends ChangeNotifier {
     required double anchorSlot,
     required bool preferLeft,
   }) {
-    // Treat slots as integers to avoid rounding surprises
     final taken = <int>{};
     for (final n in _nodes.values) {
       if (n.levelY == levelY) taken.add(n.slotX.toInt());
     }
 
-    // anchor can be midpoint -> round once
     final base = anchorSlot.round();
 
     for (int d = 0; d < 500; d++) {
@@ -321,7 +331,6 @@ class FamilyTreeStore extends ChangeNotifier {
       final taken = <int>{};
       int? prevSlot;
 
-      // forward pass: only push right when collisions/gaps are violated
       for (final id in ids) {
         final node = _nodes[id]!;
         int target = node.slotX.toInt();
@@ -340,7 +349,6 @@ class FamilyTreeStore extends ChangeNotifier {
         prevSlot = target;
       }
 
-      // pull-back pass: pull left when possible without violating min gap
       ids.sort((a, b) => _nodes[a]!.slotX.compareTo(_nodes[b]!.slotX));
       for (int i = ids.length - 2; i >= 0; i--) {
         final left = _nodes[ids[i]]!;
@@ -352,11 +360,9 @@ class FamilyTreeStore extends ChangeNotifier {
     }
   }
 
-  /// ✅ Anchor the whole tree to a stable root-ish node (prevents "drift far away")
   void _anchorToRoot() {
     if (_nodes.isEmpty) return;
 
-    // Lowest levelY, then smallest id
     FamilyNode anchor = _nodes.values.first;
     for (final n in _nodes.values) {
       if (n.levelY < anchor.levelY) {
@@ -376,12 +382,9 @@ class FamilyTreeStore extends ChangeNotifier {
 
   void _stabilizeLayout() {
     _compactSlotsPerLevel();
-    _anchorToRoot(); // ✅ no avg-recenter drift
+    _anchorToRoot();
   }
 
-  // -------------------------------------------------------------------
-
-  /// ✅ Add the very first/root member (no links yet)
   FamilyNode addRoot({
     required String name,
     required Kind kind,
@@ -397,7 +400,6 @@ class FamilyTreeStore extends ChangeNotifier {
     return root;
   }
 
-  /// ✅ When a spouse is added, attach as missing co-parent for existing children.
   void _backfillSpouseAsCoParent({
     required int personId,
     required int spouseId,
@@ -405,7 +407,6 @@ class FamilyTreeStore extends ChangeNotifier {
     final person = getNode(personId);
     final spouse = getNode(spouseId);
 
-    // 1) spouse becomes missing parent for person's children
     for (final childId in person.children) {
       final (motherId, fatherId) = parentPairForPerson(childId);
 
@@ -416,7 +417,6 @@ class FamilyTreeStore extends ChangeNotifier {
       }
     }
 
-    // 2) person becomes missing parent for spouse's children (symmetry)
     for (final childId in spouse.children) {
       final (motherId, fatherId) = parentPairForPerson(childId);
 
@@ -428,7 +428,6 @@ class FamilyTreeStore extends ChangeNotifier {
     }
   }
 
-  /// ✅ Add spouse (single spouse per person for now).
   FamilyNode? addSpouse({
     required int personId,
     required Kind spouseKind,
@@ -456,8 +455,6 @@ class FamilyTreeStore extends ChangeNotifier {
     );
 
     linkSpouses(aId: personId, bId: spouse.id, notify: false);
-
-    // ✅ if children already exist, spouse becomes the missing co-parent
     _backfillSpouseAsCoParent(personId: personId, spouseId: spouse.id);
 
     _stabilizeLayout();
@@ -472,11 +469,15 @@ class FamilyTreeStore extends ChangeNotifier {
   }) {
     if (parentKind != Kind.mother && parentKind != Kind.father) return null;
 
+    final person = getNode(personId);
+
+    // ✅ HARD STOP: cannot exceed 2 parents
+    if (person.parents.length >= 2) return null;
+
     final (motherId, fatherId) = parentPairForPerson(personId);
     if (parentKind == Kind.mother && motherId != null) return null;
     if (parentKind == Kind.father && fatherId != null) return null;
 
-    final person = getNode(personId);
     final otherParentId = parentKind == Kind.mother ? fatherId : motherId;
 
     final parent = createNode(
@@ -538,6 +539,13 @@ class FamilyTreeStore extends ChangeNotifier {
 
   void addManualOffset(int nodeId, Offset delta) {
     getNode(nodeId).manualOffset += delta;
+    notifyListeners();
+  }
+
+  void clearAll() {
+    _nodes.clear();
+    _nextId = 1;
+    lastAddedId = null;
     notifyListeners();
   }
 }
@@ -605,16 +613,32 @@ class _FamilyTreePageState extends State<FamilyTreePage> {
   static const double hGap = 40;
   static const double vGap = 70;
 
-  /// ✅ Big virtual plane
   static const double virtualSize = 100000;
 
   final TransformationController _tc = TransformationController();
   bool _didInitialCenter = false;
 
+  // ✅ UPDATED LIMITS: not very small
+  static const double _minZoom = 0.3;
+  static const double _maxZoom = 3.0;
+
+  double _zoomValue = 1.0;
+  bool _syncingFromController = false;
+
   @override
   void initState() {
     super.initState();
     store = FamilyTreeStore();
+
+    _tc.addListener(() {
+      if (!mounted) return;
+      if (_syncingFromController) return;
+
+      final s = _tc.value.getMaxScaleOnAxis().clamp(_minZoom, _maxZoom);
+      if ((s - _zoomValue).abs() > 0.005) {
+        setState(() => _zoomValue = s);
+      }
+    });
   }
 
   @override
@@ -622,6 +646,50 @@ class _FamilyTreePageState extends State<FamilyTreePage> {
     store.dispose();
     _tc.dispose();
     super.dispose();
+  }
+
+  void _setZoom(double newZoom) {
+    final screenSize = MediaQuery.of(context).size;
+    final viewportCenter = Offset(screenSize.width / 2, screenSize.height / 2);
+    final sceneCenter = _tc.toScene(viewportCenter);
+
+    _syncingFromController = true;
+    _tc.value = Matrix4.identity()
+      ..translate(viewportCenter.dx, viewportCenter.dy)
+      ..scale(newZoom)
+      ..translate(-sceneCenter.dx, -sceneCenter.dy);
+    _syncingFromController = false;
+
+    setState(() => _zoomValue = newZoom);
+  }
+
+  Future<void> _logout() async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Log out?'),
+        content: const Text('This will clear the current family tree.'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Log out'),
+          ),
+        ],
+      ),
+    );
+
+    if (ok != true) return;
+
+    store.clearAll();
+    _didInitialCenter = false;
+    _syncingFromController = true;
+    _tc.value = Matrix4.identity();
+    _syncingFromController = false;
+    setState(() => _zoomValue = 1.0);
   }
 
   @override
@@ -636,7 +704,6 @@ class _FamilyTreePageState extends State<FamilyTreePage> {
           vGap: vGap,
         ).compute();
 
-        // ✅ center world inside the virtual plane
         final origin = const Offset(virtualSize / 2, virtualSize / 2);
         final layout = <int, Offset>{
           for (final e in layoutRaw.entries) e.key: e.value + origin,
@@ -648,7 +715,7 @@ class _FamilyTreePageState extends State<FamilyTreePage> {
           _didInitialCenter = true;
           WidgetsBinding.instance.addPostFrameCallback((_) {
             if (!mounted) return;
-            _fitToScreen(bounds);
+            _fitToScreen(bounds); // initial center only
           });
         }
 
@@ -660,14 +727,9 @@ class _FamilyTreePageState extends State<FamilyTreePage> {
             title: const Text('Family Tree Builder'),
             actions: [
               IconButton(
-                tooltip: 'Reset view',
-                onPressed: () => _fitToScreen(bounds),
-                icon: const Icon(Icons.center_focus_strong),
-              ),
-              IconButton(
-                tooltip: 'Fit to screen',
-                onPressed: () => _fitToScreen(bounds),
-                icon: const Icon(Icons.fit_screen),
+                tooltip: 'Log out',
+                onPressed: _logout,
+                icon: const Icon(Icons.logout),
               ),
             ],
           ),
@@ -678,8 +740,8 @@ class _FamilyTreePageState extends State<FamilyTreePage> {
                 constrained: false,
                 boundaryMargin: const EdgeInsets.all(1000000),
                 clipBehavior: Clip.none,
-                minScale: 0.02,
-                maxScale: 10.0,
+                minScale: _minZoom,
+                maxScale: _maxZoom,
                 child: SizedBox(
                   width: canvasSize.width,
                   height: canvasSize.height,
@@ -747,6 +809,55 @@ class _FamilyTreePageState extends State<FamilyTreePage> {
                     ),
                   ),
                 ),
+
+              // ✅ Zoom slider overlay with clickable +/- buttons
+              if (!isEmpty)
+                Positioned(
+                  right: 16,
+                  bottom: 16,
+                  child: Material(
+                    elevation: 2,
+                    color: Colors.white,
+                    borderRadius: BorderRadius.circular(16),
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 12, vertical: 10),
+                      child: SizedBox(
+                        width: 240,
+                        child: Row(
+                          children: [
+                            IconButton(
+                              tooltip: 'Zoom out',
+                              icon: const Icon(Icons.remove, size: 18),
+                              onPressed: () {
+                                final next =
+                                    (_zoomValue / 1.15).clamp(_minZoom, _maxZoom);
+                                _setZoom(next);
+                              },
+                            ),
+                            Expanded(
+                              child: Slider(
+                                value: _zoomValue.clamp(_minZoom, _maxZoom),
+                                min: _minZoom,
+                                max: _maxZoom,
+                                onChanged: (v) => _setZoom(v),
+                              ),
+                            ),
+                            IconButton(
+                              tooltip: 'Zoom in',
+                              icon: const Icon(Icons.add, size: 18),
+                              onPressed: () {
+                                final next =
+                                    (_zoomValue * 1.15).clamp(_minZoom, _maxZoom);
+                                _setZoom(next);
+                              },
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
             ],
           ),
         );
@@ -784,10 +895,15 @@ class _FamilyTreePageState extends State<FamilyTreePage> {
         min(screenSize.width / bounds.width, screenSize.height / bounds.height) *
             0.8;
 
+    _syncingFromController = true;
     _tc.value = Matrix4.identity()
       ..translate(screenSize.width / 2, screenSize.height / 2)
       ..scale(scale)
       ..translate(-bounds.center.dx, -bounds.center.dy);
+    _syncingFromController = false;
+
+    final clamped = scale.clamp(_minZoom, _maxZoom);
+    setState(() => _zoomValue = clamped);
   }
 
   Future<void> _addFirstMemberFlow(BuildContext context) async {
@@ -827,21 +943,6 @@ class _FamilyTreePageState extends State<FamilyTreePage> {
     if (name == null) return;
 
     store.addRoot(name: name, kind: chosen);
-
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!mounted) return;
-      final layoutRaw = FamilyTreeLayout(
-        store: store,
-        cardSize: cardSize,
-        hGap: hGap,
-        vGap: vGap,
-      ).compute();
-      final origin = const Offset(virtualSize / 2, virtualSize / 2);
-      final layout = <int, Offset>{
-        for (final e in layoutRaw.entries) e.key: e.value + origin,
-      };
-      _fitToScreen(_computeBounds(layout));
-    });
   }
 
   Future<void> _openNodeActions(BuildContext context, int nodeId) async {
@@ -925,6 +1026,14 @@ class _FamilyTreePageState extends State<FamilyTreePage> {
       return;
     }
 
+    // ✅ NEW: Block spouse if already has a co-parent via any shared child
+    if (store.hasCoParentViaChildren(personId)) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('${person.name} already has a co-parent.')),
+      );
+      return;
+    }
+
     final options = store.allowedSpouseKindsFor(person.kind);
 
     final chosen = await showModalBottomSheet<Kind>(
@@ -974,6 +1083,15 @@ class _FamilyTreePageState extends State<FamilyTreePage> {
   Future<void> _addParentFlow(BuildContext context,
       {required int personId}) async {
     final person = store.getNode(personId);
+
+    // ✅ NEW: hard stop in UI too (no more than 2 parents)
+    if (person.parents.length >= 2) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('${person.name} already has 2 parents.')),
+      );
+      return;
+    }
+
     final (motherId, fatherId) = store.parentPairForPerson(personId);
 
     final options = <Kind>[
@@ -984,8 +1102,8 @@ class _FamilyTreePageState extends State<FamilyTreePage> {
     if (options.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-            content:
-                Text('${person.name} already has a Mother and a Father.')),
+          content: Text('${person.name} already has a Mother and a Father.'),
+        ),
       );
       return;
     }
@@ -1017,16 +1135,18 @@ class _FamilyTreePageState extends State<FamilyTreePage> {
 
     if (chosen == null) return;
 
-    final name = await _promptText(context,
-        title: '${chosen.label} Name', initial: 'New ${chosen.label}');
+    final name = await _promptText(
+      context,
+      title: '${chosen.label} Name',
+      initial: 'New ${chosen.label}',
+    );
     if (name == null) return;
 
     final added =
         store.addParent(personId: personId, parentKind: chosen, name: name);
     if (added == null) {
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-            content: Text('Could not add ${chosen.label} (already exists).')),
+        SnackBar(content: Text('Could not add ${chosen.label} (blocked).')),
       );
     }
   }
@@ -1232,9 +1352,6 @@ class _ConnectorPainter extends CustomPainter {
       return Offset(p.dx + cardSize.width / 2, p.dy + cardSize.height);
     }
 
-    // -----------------------
-    // Build parent-groups FIRST (and track which couples already have children)
-    // -----------------------
     final Map<String, _Group> groups = {};
     final Set<String> couplesWithChildren = {};
 
@@ -1257,15 +1374,12 @@ class _ConnectorPainter extends CustomPainter {
       if (!parentsHavePos) continue;
 
       final key = parentIds.join('_');
-      couplesWithChildren.add(key); // ✅ prevents double spouse line
+      couplesWithChildren.add(key);
 
       groups.putIfAbsent(key, () => _Group(parentIds: parentIds));
       groups[key]!.childIds.add(child.id);
     }
 
-    // -----------------------
-    // Spouse connectors (ONLY if they do NOT already have children together)
-    // -----------------------
     final drawnSpousePairs = <String>{};
 
     for (final a in store.nodes.values) {
@@ -1315,9 +1429,6 @@ class _ConnectorPainter extends CustomPainter {
       }
     }
 
-    // -----------------------
-    // Parent -> children grouped connectors
-    // -----------------------
     for (final g in groups.values) {
       final childTops = <Offset>[];
       for (final cid in g.childIds) {
