@@ -1,5 +1,6 @@
 import 'dart:math';
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart'; // ✅ MatrixUtils
 
 void main() => runApp(const DashboardPage());
 
@@ -206,8 +207,8 @@ class FamilyTreeStore extends ChangeNotifier {
   /// ✅ Spouse kind options (opposite gender) — NO "Son" and NO "Daughter"
   List<Kind> allowedSpouseKindsFor(Kind personKind) {
     final wantsFemale = personKind.gender == Gender.male;
-    if (wantsFemale) return const [Kind.mother]; // ✅ removed Kind.daughter
-    return const [Kind.father]; // ✅ spouse for female -> father only
+    if (wantsFemale) return const [Kind.mother];
+    return const [Kind.father];
   }
 
   // -------------------------------------------------------------------
@@ -278,7 +279,6 @@ class FamilyTreeStore extends ChangeNotifier {
     required int? existingOtherParentId,
   }) {
     final person = getNode(personId);
-
     if (existingOtherParentId == null) return person.slotX;
 
     final other = getNode(existingOtherParentId);
@@ -385,6 +385,37 @@ class FamilyTreeStore extends ChangeNotifier {
     _anchorToRoot();
   }
 
+  /// ✅ NEW: Delete a member and remove all related links.
+  void deleteNode(int id) {
+    if (!_nodes.containsKey(id)) return;
+
+    final node = getNode(id);
+
+    for (final pid in node.parents.toList()) {
+      final p = _nodes[pid];
+      if (p != null) p.children.remove(id);
+    }
+
+    for (final cid in node.children.toList()) {
+      final c = _nodes[cid];
+      if (c != null) c.parents.remove(id);
+    }
+
+    for (final sid in node.spouses.toList()) {
+      final s = _nodes[sid];
+      if (s != null) s.spouses.remove(id);
+    }
+
+    _nodes.remove(id);
+
+    if (lastAddedId == id) {
+      lastAddedId = _nodes.isEmpty ? null : _nodes.keys.reduce(max);
+    }
+
+    _stabilizeLayout();
+    notifyListeners();
+  }
+
   FamilyNode addRoot({
     required String name,
     required Kind kind,
@@ -471,7 +502,6 @@ class FamilyTreeStore extends ChangeNotifier {
 
     final person = getNode(personId);
 
-    // ✅ HARD STOP: cannot exceed 2 parents
     if (person.parents.length >= 2) return null;
 
     final (motherId, fatherId) = parentPairForPerson(personId);
@@ -548,6 +578,85 @@ class FamilyTreeStore extends ChangeNotifier {
     lastAddedId = null;
     notifyListeners();
   }
+
+  // -------------------------------------------------------------------
+  // ✅ Connect EXISTING tiles by drag-to-connect (ports)
+  // -------------------------------------------------------------------
+
+  bool tryLinkExistingParent({required int parentId, required int childId}) {
+    if (!_nodes.containsKey(parentId) || !_nodes.containsKey(childId)) {
+      return false;
+    }
+    if (parentId == childId) return false;
+
+    final parent = getNode(parentId);
+    final child = getNode(childId);
+
+    if (parent.kind != Kind.mother && parent.kind != Kind.father) return false;
+    if (child.parents.length >= 2) return false;
+
+    final (motherId, fatherId) = parentPairForPerson(childId);
+
+    if (parent.gender == Gender.female && motherId != null) return false;
+    if (parent.gender == Gender.male && fatherId != null) return false;
+
+    linkParentChild(parentId: parentId, childId: childId, notify: true);
+    _stabilizeLayout();
+    notifyListeners();
+    return true;
+  }
+
+  bool tryLinkExistingChild({required int parentId, required int childId}) {
+    if (!_nodes.containsKey(parentId) || !_nodes.containsKey(childId)) {
+      return false;
+    }
+    if (parentId == childId) return false;
+
+    final parent = getNode(parentId);
+    final child = getNode(childId);
+
+    if (child.kind != Kind.son && child.kind != Kind.daughter) return false;
+    if (child.parents.length >= 2) return false;
+
+    final (motherId, fatherId) = parentPairForPerson(childId);
+
+    if (parent.gender == Gender.female && motherId != null) return false;
+    if (parent.gender == Gender.male && fatherId != null) return false;
+
+    linkParentChild(parentId: parentId, childId: childId, notify: true);
+
+    final sp = spouseOf(parentId);
+    if (sp != null) {
+      _backfillSpouseAsCoParent(personId: parentId, spouseId: sp);
+    }
+
+    _stabilizeLayout();
+    notifyListeners();
+    return true;
+  }
+
+  bool tryLinkExistingSpouses({required int aId, required int bId}) {
+    if (!_nodes.containsKey(aId) || !_nodes.containsKey(bId)) return false;
+    if (aId == bId) return false;
+
+    final a = getNode(aId);
+    final b = getNode(bId);
+
+    if (a.spouses.isNotEmpty || b.spouses.isNotEmpty) return false;
+    if (a.gender == b.gender) return false;
+
+    if (hasCoParentViaChildren(aId) || hasCoParentViaChildren(bId)) return false;
+
+    linkSpouses(aId: aId, bId: bId, notify: false);
+
+    // ✅ Backfill BOTH ways
+    _backfillSpouseAsCoParent(personId: aId, spouseId: bId);
+    _backfillSpouseAsCoParent(personId: bId, spouseId: aId);
+
+    _stabilizeLayout();
+    notifyListeners();
+    return true;
+  }
 }
 
 class FamilyTreeLayout {
@@ -606,6 +715,12 @@ class FamilyTreePage extends StatefulWidget {
   State<FamilyTreePage> createState() => _FamilyTreePageState();
 }
 
+/// ✅ Ports meaning:
+/// - Top    => Parents
+/// - Bottom => Children
+/// - Sides  => Spouse
+enum _LinkPort { parentTop, childBottom, spouseLeft, spouseRight }
+
 class _FamilyTreePageState extends State<FamilyTreePage> {
   late final FamilyTreeStore store;
 
@@ -618,12 +733,30 @@ class _FamilyTreePageState extends State<FamilyTreePage> {
   final TransformationController _tc = TransformationController();
   bool _didInitialCenter = false;
 
-  // ✅ UPDATED LIMITS: not very small
   static const double _minZoom = 0.3;
   static const double _maxZoom = 3.0;
 
   double _zoomValue = 1.0;
   bool _syncingFromController = false;
+
+  // ✅ Drag-to-connect state
+  bool _isLinking = false;
+  int? _linkFromNodeId;
+  _LinkPort? _linkPort;
+  Offset _linkStartScene = Offset.zero;
+  Offset _linkCurrentViewport = Offset.zero;
+
+  // ✅ Snap state
+  int? _hoverTargetId;
+  Offset _snappedEndViewport = Offset.zero;
+
+  static const double _snapRadius = 70.0;
+
+  // ✅ Tile hover id (desktop/web)
+  int? _hoveredNodeId;
+
+  // ✅ Keep last computed layout (scene coords)
+  Map<int, Offset> _lastLayoutScene = {};
 
   @override
   void initState() {
@@ -661,6 +794,167 @@ class _FamilyTreePageState extends State<FamilyTreePage> {
     _syncingFromController = false;
 
     setState(() => _zoomValue = newZoom);
+  }
+
+  Offset _sceneToViewport(Offset scenePoint) {
+    final o = MatrixUtils.transformPoint(_tc.value, scenePoint);
+    return Offset(o.dx, o.dy);
+  }
+
+  Offset _globalToViewport(Offset global) {
+    final box = context.findRenderObject() as RenderBox?;
+    if (box == null) return Offset.zero;
+    return box.globalToLocal(global);
+  }
+
+  // ---------------- SNAP / MAGNET HELPERS ----------------
+
+  double _distancePointToRect(Offset p, Rect r) {
+    final dx = (p.dx < r.left)
+        ? (r.left - p.dx)
+        : (p.dx > r.right)
+            ? (p.dx - r.right)
+            : 0.0;
+
+    final dy = (p.dy < r.top)
+        ? (r.top - p.dy)
+        : (p.dy > r.bottom)
+            ? (p.dy - r.bottom)
+            : 0.0;
+
+    return sqrt(dx * dx + dy * dy);
+  }
+
+  Offset _nearestPointOnRect(Offset p, Rect r) {
+    final x = p.dx.clamp(r.left, r.right);
+    final y = p.dy.clamp(r.top, r.bottom);
+    return Offset(x, y);
+  }
+
+  int? _nearestNodeInViewport(Offset viewportPoint, {int? excludeId}) {
+    int? bestId;
+    double bestDist = double.infinity;
+
+    for (final e in _lastLayoutScene.entries) {
+      if (excludeId != null && e.key == excludeId) continue;
+
+      final rectScene = Rect.fromLTWH(
+        e.value.dx,
+        e.value.dy,
+        cardSize.width,
+        cardSize.height,
+      );
+
+      final tl = _sceneToViewport(rectScene.topLeft);
+      final br = _sceneToViewport(rectScene.bottomRight);
+      final rectVp = Rect.fromPoints(tl, br);
+
+      final d = _distancePointToRect(viewportPoint, rectVp);
+      if (d < bestDist) {
+        bestDist = d;
+        bestId = e.key;
+      }
+    }
+
+    if (bestId == null) return null;
+    return (bestDist <= _snapRadius) ? bestId : null;
+  }
+
+  // ---------------- LINKING (FAST + SNAP) ----------------
+
+  void _startLink({
+    required int fromNodeId,
+    required _LinkPort port,
+    required Offset startScene,
+    required Offset startViewport,
+  }) {
+    setState(() {
+      _isLinking = true;
+      _linkFromNodeId = fromNodeId;
+      _linkPort = port;
+      _linkStartScene = startScene;
+      _linkCurrentViewport = startViewport;
+      _hoverTargetId = null;
+      _snappedEndViewport = startViewport;
+
+      _hoveredNodeId = fromNodeId;
+    });
+
+    _updateLink(startViewport);
+  }
+
+  void _updateLink(Offset viewportPoint) {
+    if (!_isLinking) return;
+
+    final fromId = _linkFromNodeId;
+    if (fromId == null) return;
+
+    final targetId = _nearestNodeInViewport(viewportPoint, excludeId: fromId);
+
+    Offset snapped = viewportPoint;
+
+    if (targetId != null) {
+      final topLeftScene = _lastLayoutScene[targetId]!;
+      final rectScene = Rect.fromLTWH(
+        topLeftScene.dx,
+        topLeftScene.dy,
+        cardSize.width,
+        cardSize.height,
+      );
+
+      final tl = _sceneToViewport(rectScene.topLeft);
+      final br = _sceneToViewport(rectScene.bottomRight);
+      final rectVp = Rect.fromPoints(tl, br);
+
+      snapped = _nearestPointOnRect(viewportPoint, rectVp);
+    }
+
+    setState(() {
+      _linkCurrentViewport = viewportPoint;
+      _hoverTargetId = targetId;
+      _snappedEndViewport = snapped;
+    });
+  }
+
+  void _endLink(Offset viewportPoint) {
+    if (!_isLinking) return;
+
+    final fromId = _linkFromNodeId;
+    final port = _linkPort;
+    final targetId = _hoverTargetId;
+
+    setState(() {
+      _isLinking = false;
+      _linkFromNodeId = null;
+      _linkPort = null;
+      _hoverTargetId = null;
+    });
+
+    if (fromId == null || port == null) return;
+    if (targetId == null) return;
+
+    bool ok = false;
+
+    switch (port) {
+      case _LinkPort.parentTop:
+        ok = store.tryLinkExistingParent(parentId: targetId, childId: fromId);
+        break;
+      case _LinkPort.childBottom:
+        ok = store.tryLinkExistingChild(parentId: fromId, childId: targetId);
+        break;
+      case _LinkPort.spouseLeft:
+      case _LinkPort.spouseRight:
+        ok = store.tryLinkExistingSpouses(aId: fromId, bId: targetId);
+        break;
+    }
+
+    if (!ok) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Cannot connect these tiles (rules blocked).'),
+        ),
+      );
+    }
   }
 
   Future<void> _logout() async {
@@ -709,13 +1003,15 @@ class _FamilyTreePageState extends State<FamilyTreePage> {
           for (final e in layoutRaw.entries) e.key: e.value + origin,
         };
 
+        _lastLayoutScene = layout;
+
         final bounds = _computeBounds(layout);
 
         if (!_didInitialCenter && layout.isNotEmpty) {
           _didInitialCenter = true;
           WidgetsBinding.instance.addPostFrameCallback((_) {
             if (!mounted) return;
-            _fitToScreen(bounds); // initial center only
+            _fitToScreen(bounds);
           });
         }
 
@@ -762,14 +1058,68 @@ class _FamilyTreePageState extends State<FamilyTreePage> {
                           node: store.getNode(entry.key),
                           topLeft: entry.value,
                           size: cardSize,
+                          isHovered: entry.key == _hoveredNodeId ||
+                              (_isLinking && _linkFromNodeId == entry.key),
+                          dragEnabled:
+                              !_isLinking, // ✅ FIX: prevent tile drag while linking
+                          onHoverChanged: (hovering) {
+                            if (!mounted) return;
+                            setState(() {
+                              if (hovering) {
+                                _hoveredNodeId = entry.key;
+                              } else if (_hoveredNodeId == entry.key) {
+                                _hoveredNodeId = null;
+                              }
+                            });
+                          },
                           onTap: () => _openNodeActions(context, entry.key),
                           onDragDelta: (delta) =>
                               store.addManualOffset(entry.key, delta),
+                          onStartPortDrag: (port, globalStart) {
+                            final topLeft = layout[entry.key]!;
+                            final startScene = switch (port) {
+                              _LinkPort.parentTop => Offset(
+                                  topLeft.dx + cardSize.width / 2, topLeft.dy),
+                              _LinkPort.childBottom => Offset(
+                                  topLeft.dx + cardSize.width / 2,
+                                  topLeft.dy + cardSize.height),
+                              _LinkPort.spouseLeft => Offset(topLeft.dx,
+                                  topLeft.dy + cardSize.height / 2),
+                              _LinkPort.spouseRight => Offset(
+                                  topLeft.dx + cardSize.width,
+                                  topLeft.dy + cardSize.height / 2),
+                            };
+
+                            _startLink(
+                              fromNodeId: entry.key,
+                              port: port,
+                              startScene: startScene,
+                              startViewport: _globalToViewport(globalStart),
+                            );
+                          },
+                          onUpdatePortDrag: (g) =>
+                              _updateLink(_globalToViewport(g)),
+                          onEndPortDrag: (g) => _endLink(_globalToViewport(g)),
                         ),
                     ],
                   ),
                 ),
               ),
+
+              if (_isLinking)
+                Positioned.fill(
+                  child: IgnorePointer(
+                    child: CustomPaint(
+                      painter: _LinkPreviewPainter(
+                        start: _sceneToViewport(_linkStartScene),
+                        end: (_hoverTargetId != null)
+                            ? _snappedEndViewport
+                            : _linkCurrentViewport,
+                      ),
+                    ),
+                  ),
+                ),
+
               if (isEmpty)
                 Center(
                   child: Padding(
@@ -810,7 +1160,6 @@ class _FamilyTreePageState extends State<FamilyTreePage> {
                   ),
                 ),
 
-              // ✅ Zoom slider overlay with clickable +/- buttons
               if (!isEmpty)
                 Positioned(
                   right: 16,
@@ -830,8 +1179,8 @@ class _FamilyTreePageState extends State<FamilyTreePage> {
                               tooltip: 'Zoom out',
                               icon: const Icon(Icons.remove, size: 18),
                               onPressed: () {
-                                final next =
-                                    (_zoomValue / 1.15).clamp(_minZoom, _maxZoom);
+                                final next = (_zoomValue / 1.15)
+                                    .clamp(_minZoom, _maxZoom);
                                 _setZoom(next);
                               },
                             ),
@@ -847,8 +1196,8 @@ class _FamilyTreePageState extends State<FamilyTreePage> {
                               tooltip: 'Zoom in',
                               icon: const Icon(Icons.add, size: 18),
                               onPressed: () {
-                                final next =
-                                    (_zoomValue * 1.15).clamp(_minZoom, _maxZoom);
+                                final next = (_zoomValue * 1.15)
+                                    .clamp(_minZoom, _maxZoom);
                                 _setZoom(next);
                               },
                             ),
@@ -1007,6 +1356,39 @@ class _FamilyTreePageState extends State<FamilyTreePage> {
                     await _addChildFlow(context, fromNodeId: nodeId);
                   },
                 ),
+                ListTile(
+                  leading: const Icon(Icons.delete_outline,
+                      color: Colors.redAccent),
+                  title: const Text('Delete'),
+                  onTap: () async {
+                    Navigator.pop(ctx);
+
+                    final ok = await showDialog<bool>(
+                      context: context,
+                      builder: (dctx) => AlertDialog(
+                        title: const Text('Delete member?'),
+                        content: const Text(
+                          'This will remove the member and all related links (parents, children, spouse).',
+                        ),
+                        actions: [
+                          TextButton(
+                            onPressed: () => Navigator.pop(dctx, false),
+                            child: const Text('Cancel'),
+                          ),
+                          FilledButton(
+                            style: FilledButton.styleFrom(
+                                backgroundColor: Colors.redAccent),
+                            onPressed: () => Navigator.pop(dctx, true),
+                            child: const Text('Delete'),
+                          ),
+                        ],
+                      ),
+                    );
+
+                    if (ok != true) return;
+                    store.deleteNode(nodeId);
+                  },
+                ),
               ],
             ),
           ),
@@ -1026,7 +1408,6 @@ class _FamilyTreePageState extends State<FamilyTreePage> {
       return;
     }
 
-    // ✅ NEW: Block spouse if already has a co-parent via any shared child
     if (store.hasCoParentViaChildren(personId)) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('${person.name} already has a co-parent.')),
@@ -1084,7 +1465,6 @@ class _FamilyTreePageState extends State<FamilyTreePage> {
       {required int personId}) async {
     final person = store.getNode(personId);
 
-    // ✅ NEW: hard stop in UI too (no more than 2 parents)
     if (person.parents.length >= 2) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('${person.name} already has 2 parents.')),
@@ -1187,8 +1567,11 @@ class _FamilyTreePageState extends State<FamilyTreePage> {
     store.addChild(fromNodeId: fromNodeId, name: name, childKind: chosen);
   }
 
-  Future<String?> _promptText(BuildContext context,
-      {required String title, required String initial}) async {
+  Future<String?> _promptText(
+    BuildContext context, {
+    required String title,
+    required String initial,
+  }) async {
     final c = TextEditingController(text: initial);
 
     return showDialog<String>(
@@ -1207,11 +1590,13 @@ class _FamilyTreePageState extends State<FamilyTreePage> {
           ),
           actions: [
             TextButton(
-                onPressed: () => Navigator.pop(ctx),
-                child: const Text('Cancel')),
+              onPressed: () => Navigator.pop(ctx),
+              child: const Text('Cancel'),
+            ),
             FilledButton(
-                onPressed: () => Navigator.pop(ctx, c.text),
-                child: const Text('Save')),
+              onPressed: () => Navigator.pop(ctx, c.text),
+              child: const Text('Save'),
+            ),
           ],
         );
       },
@@ -1226,6 +1611,12 @@ class _AnimatedNode extends StatefulWidget {
     required this.size,
     required this.onTap,
     required this.onDragDelta,
+    required this.onStartPortDrag,
+    required this.onUpdatePortDrag,
+    required this.onEndPortDrag,
+    required this.isHovered,
+    required this.onHoverChanged,
+    required this.dragEnabled, // ✅ NEW
   });
 
   final FamilyNode node;
@@ -1233,6 +1624,15 @@ class _AnimatedNode extends StatefulWidget {
   final Size size;
   final VoidCallback onTap;
   final ValueChanged<Offset> onDragDelta;
+
+  final void Function(_LinkPort port, Offset globalStart) onStartPortDrag;
+  final void Function(Offset globalPos) onUpdatePortDrag;
+  final void Function(Offset globalPos) onEndPortDrag;
+
+  final bool isHovered;
+  final ValueChanged<bool> onHoverChanged;
+
+  final bool dragEnabled; // ✅ NEW
 
   @override
   State<_AnimatedNode> createState() => _AnimatedNodeState();
@@ -1248,18 +1648,46 @@ class _AnimatedNodeState extends State<_AnimatedNode> {
       top: widget.topLeft.dy,
       width: widget.size.width,
       height: widget.size.height,
-      child: GestureDetector(
-        onTap: widget.onTap,
-        onPanUpdate: (d) => widget.onDragDelta(d.delta),
-        child: _MemberCard(node: widget.node),
+      child: MouseRegion(
+        onEnter: (_) => widget.onHoverChanged(true),
+        onExit: (_) => widget.onHoverChanged(false),
+        child: GestureDetector(
+          onTap: widget.onTap,
+          // ✅ FIX: don't drag the tile while you are linking
+          onPanUpdate:
+              widget.dragEnabled ? (d) => widget.onDragDelta(d.delta) : null,
+          child: _MemberCard(
+            node: widget.node,
+            showPorts: widget.isHovered,
+            onStartPortDrag: widget.onStartPortDrag,
+            onUpdatePortDrag: widget.onUpdatePortDrag,
+            onEndPortDrag: widget.onEndPortDrag,
+          ),
+        ),
       ),
     );
   }
 }
 
 class _MemberCard extends StatelessWidget {
-  const _MemberCard({required this.node});
+  const _MemberCard({
+    required this.node,
+    required this.showPorts,
+    required this.onStartPortDrag,
+    required this.onUpdatePortDrag,
+    required this.onEndPortDrag,
+  });
+
   final FamilyNode node;
+  final bool showPorts;
+
+  final void Function(_LinkPort port, Offset globalStart) onStartPortDrag;
+  final void Function(Offset globalPos) onUpdatePortDrag;
+  final void Function(Offset globalPos) onEndPortDrag;
+
+  bool get _showParentPort => showPorts && node.parents.length < 2;
+  bool get _showChildPort => showPorts;
+  bool get _showSpousePorts => showPorts && node.spouses.isEmpty;
 
   @override
   Widget build(BuildContext context) {
@@ -1273,47 +1701,225 @@ class _MemberCard extends StatelessWidget {
       shadowColor: Colors.black12,
       borderRadius: BorderRadius.circular(16),
       color: Colors.white,
-      child: InkWell(
-        borderRadius: BorderRadius.circular(16),
-        child: Padding(
-          padding: const EdgeInsets.all(10),
-          child: Row(
-            children: [
-              Container(
-                width: 42,
-                height: 42,
-                decoration: BoxDecoration(
-                  color: tone,
-                  borderRadius: BorderRadius.circular(12),
-                ),
-                child: Icon(node.kind.icon, color: Colors.black87),
+      child: Stack(
+        clipBehavior: Clip.none,
+        children: [
+          InkWell(
+            borderRadius: BorderRadius.circular(16),
+            child: Padding(
+              padding: const EdgeInsets.all(10),
+              child: Row(
+                children: [
+                  Container(
+                    width: 42,
+                    height: 42,
+                    decoration: BoxDecoration(
+                      color: tone,
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: Icon(node.kind.icon, color: Colors.black87),
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Column(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          node.name,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(fontWeight: FontWeight.w700),
+                        ),
+                        const SizedBox(height: 4),
+                        Text(
+                          node.kind.label,
+                          style: TextStyle(
+                            color: Colors.grey.shade700,
+                            fontSize: 12,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
               ),
-              const SizedBox(width: 10),
-              Expanded(
-                child: Column(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      node.name,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(fontWeight: FontWeight.w700),
-                    ),
-                    const SizedBox(height: 4),
-                    Text(
-                      node.kind.label,
-                      style:
-                          TextStyle(color: Colors.grey.shade700, fontSize: 12),
-                    ),
-                  ],
-                ),
+            ),
+          ),
+
+          if (_showParentPort)
+            Positioned(
+              top: -10,
+              left: (170 / 2) - 10,
+              child: _PlusPort(
+                tooltip: 'Connect Parent',
+                onStart: (g) => onStartPortDrag(_LinkPort.parentTop, g),
+                onUpdate: onUpdatePortDrag,
+                onEnd: onEndPortDrag,
+              ),
+            ),
+
+          if (_showChildPort)
+            Positioned(
+              bottom: -10,
+              left: (170 / 2) - 10,
+              child: _PlusPort(
+                tooltip: 'Connect Child',
+                onStart: (g) => onStartPortDrag(_LinkPort.childBottom, g),
+                onUpdate: onUpdatePortDrag,
+                onEnd: onEndPortDrag,
+              ),
+            ),
+
+          if (_showSpousePorts) ...[
+            Positioned(
+              left: -10,
+              top: (72 / 2) - 10,
+              child: _PlusPort(
+                tooltip: 'Connect Spouse',
+                onStart: (g) => onStartPortDrag(_LinkPort.spouseLeft, g),
+                onUpdate: onUpdatePortDrag,
+                onEnd: onEndPortDrag,
+              ),
+            ),
+            Positioned(
+              right: -10,
+              top: (72 / 2) - 10,
+              child: _PlusPort(
+                tooltip: 'Connect Spouse',
+                onStart: (g) => onStartPortDrag(_LinkPort.spouseRight, g),
+                onUpdate: onUpdatePortDrag,
+                onEnd: onEndPortDrag,
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+/// ✅ FIXED: Clicking the + no longer flashes the connector.
+/// Only starts linking once the pointer MOVES a few pixels.
+class _PlusPort extends StatefulWidget {
+  const _PlusPort({
+    required this.tooltip,
+    required this.onStart,
+    required this.onUpdate,
+    required this.onEnd,
+  });
+
+  final String tooltip;
+  final void Function(Offset globalPos) onStart;
+  final void Function(Offset globalPos) onUpdate;
+  final void Function(Offset globalPos) onEnd;
+
+  @override
+  State<_PlusPort> createState() => _PlusPortState();
+}
+
+class _PlusPortState extends State<_PlusPort> {
+  static const double _dragStartThreshold = 6.0;
+
+  Offset? _downGlobal;
+  Offset? _lastGlobal;
+  bool _started = false;
+
+  void _reset() {
+    _downGlobal = null;
+    _lastGlobal = null;
+    _started = false;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Tooltip(
+      message: widget.tooltip,
+      child: Listener(
+        behavior: HitTestBehavior.translucent,
+        onPointerDown: (e) {
+          _downGlobal = e.position;
+          _lastGlobal = e.position;
+          _started = false;
+        },
+        onPointerMove: (e) {
+          if (_downGlobal == null) return;
+          _lastGlobal = e.position;
+
+          final dist = (e.position - _downGlobal!).distance;
+
+          if (!_started && dist >= _dragStartThreshold) {
+            _started = true;
+            widget.onStart(_downGlobal!);
+          }
+
+          if (_started) {
+            widget.onUpdate(e.position);
+          }
+        },
+        onPointerUp: (_) {
+          if (_started) {
+            widget.onEnd(_lastGlobal ?? Offset.zero);
+          }
+          _reset();
+        },
+        onPointerCancel: (_) {
+          if (_started) {
+            widget.onEnd(_lastGlobal ?? Offset.zero);
+          }
+          _reset();
+        },
+        child: Container(
+          width: 20,
+          height: 20,
+          decoration: BoxDecoration(
+            color: Colors.white,
+            shape: BoxShape.circle,
+            border: Border.all(color: const Color(0xFFB9C0CC), width: 1),
+            boxShadow: const [
+              BoxShadow(
+                blurRadius: 6,
+                offset: Offset(0, 2),
+                color: Colors.black12,
               ),
             ],
+          ),
+          child: const Center(
+            child: Icon(Icons.add, size: 14, color: Color(0xFF6E7685)),
           ),
         ),
       ),
     );
+  }
+}
+
+class _LinkPreviewPainter extends CustomPainter {
+  _LinkPreviewPainter({required this.start, required this.end});
+  final Offset start;
+  final Offset end;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final paint = Paint()
+      ..color = const Color(0xFF6E7685)
+      ..strokeWidth = 2
+      ..style = PaintingStyle.stroke
+      ..strokeCap = StrokeCap.round;
+
+    final mid = Offset((start.dx + end.dx) / 2, (start.dy + end.dy) / 2);
+    final ctrl = Offset(mid.dx, min(start.dy, end.dy) - 40);
+
+    final path = Path()
+      ..moveTo(start.dx, start.dy)
+      ..quadraticBezierTo(ctrl.dx, ctrl.dy, end.dx, end.dy);
+
+    canvas.drawPath(path, paint);
+    canvas.drawCircle(end, 4.5, Paint()..color = const Color(0xFF6E7685));
+  }
+
+  @override
+  bool shouldRepaint(covariant _LinkPreviewPainter oldDelegate) {
+    return oldDelegate.start != start || oldDelegate.end != end;
   }
 }
 
