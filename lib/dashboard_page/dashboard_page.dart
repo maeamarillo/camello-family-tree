@@ -1,6 +1,7 @@
 import 'dart:math';
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart'; // ✅ MatrixUtils
+import 'package:flutter/services.dart'; // ✅ Ctrl key detection (HardwareKeyboard)
 
 void main() => runApp(const DashboardPage());
 
@@ -390,12 +391,14 @@ class FamilyTreeStore extends ChangeNotifier {
   FamilyNode addRoot({
     required String name,
     required Gender gender,
+    DateTime? birthday,
   }) {
     final root = createNode(
       name: name,
       gender: gender,
       levelY: 0,
       slotX: 0,
+      birthday: birthday,
     );
     _stabilizeLayout();
     notifyListeners();
@@ -467,6 +470,7 @@ class FamilyTreeStore extends ChangeNotifier {
   FamilyNode? addSpouse({
     required int personId,
     required String name,
+    DateTime? birthday,
   }) {
     final person = getNode(personId);
     if (person.spouses.isNotEmpty) return null;
@@ -486,6 +490,7 @@ class FamilyTreeStore extends ChangeNotifier {
       gender: spouseGender,
       levelY: person.levelY,
       slotX: slot,
+      birthday: birthday,
     );
 
     linkSpouses(aId: personId, bId: spouse.id, notify: false);
@@ -500,6 +505,7 @@ class FamilyTreeStore extends ChangeNotifier {
     required int personId,
     required Gender parentGender,
     required String name,
+    DateTime? birthday,
   }) {
     final person = getNode(personId);
     if (person.parents.length >= 2) return null;
@@ -519,6 +525,7 @@ class FamilyTreeStore extends ChangeNotifier {
         newParentGender: parentGender,
         existingOtherParentId: otherParentId,
       ),
+      birthday: birthday,
     );
 
     linkParentChild(parentId: parent.id, childId: personId, notify: false);
@@ -540,6 +547,7 @@ class FamilyTreeStore extends ChangeNotifier {
     required int fromNodeId,
     required String name,
     required Gender childGender,
+    DateTime? birthday,
   }) {
     final from = getNode(fromNodeId);
     final slot = _nextChildSlotSmart(fromNodeId);
@@ -549,6 +557,7 @@ class FamilyTreeStore extends ChangeNotifier {
       gender: childGender,
       levelY: from.levelY + 1,
       slotX: slot,
+      birthday: birthday,
     );
 
     linkParentChild(parentId: from.id, childId: child.id, notify: false);
@@ -568,6 +577,17 @@ class FamilyTreeStore extends ChangeNotifier {
     notifyListeners();
   }
 
+  void addManualOffsetBulk(Set<int> nodeIds, Offset delta) {
+    bool changed = false;
+    for (final id in nodeIds) {
+      final n = _nodes[id];
+      if (n == null) continue;
+      n.manualOffset += delta;
+      changed = true;
+    }
+    if (changed) notifyListeners();
+  }
+
   void clearAll() {
     _nodes.clear();
     _nextId = 1;
@@ -579,7 +599,6 @@ class FamilyTreeStore extends ChangeNotifier {
   // ✅ DRAG-LINK RULES (FINAL): both directions behave like addChild()
   // ------------------------------------------------------------
 
-  // ✅ FINAL: if you connect child TOP (+) -> parent, still auto-add spouse/co-parent & reposition
   bool tryLinkExistingParent({required int parentId, required int childId}) {
     if (!_nodes.containsKey(parentId) || !_nodes.containsKey(childId)) return false;
     if (parentId == childId) return false;
@@ -593,10 +612,8 @@ class FamilyTreeStore extends ChangeNotifier {
     if (parent.gender == Gender.female && femaleP != null) return false;
     if (parent.gender == Gender.male && maleP != null) return false;
 
-    // 1) link chosen parent
     linkParentChild(parentId: parentId, childId: childId, notify: false);
 
-    // 2) attach spouse/co-parent like addChild()
     final coparentId = _findCoParentPreferSpouse(parentId);
     if (coparentId != null && coparentId != parentId) {
       final cp = getNode(coparentId);
@@ -609,7 +626,6 @@ class FamilyTreeStore extends ChangeNotifier {
       }
     }
 
-    // 3) reposition exactly like addChild()
     child.levelY = parent.levelY + 1;
     child.slotX = _nextChildSlotSmart(parentId);
     child.manualOffset = Offset.zero;
@@ -619,7 +635,6 @@ class FamilyTreeStore extends ChangeNotifier {
     return true;
   }
 
-  // ✅ FINAL: if you connect parent BOTTOM (+) -> child, still auto-add spouse/co-parent & reposition
   bool tryLinkExistingChild({required int parentId, required int childId}) {
     if (!_nodes.containsKey(parentId) || !_nodes.containsKey(childId)) return false;
     if (parentId == childId) return false;
@@ -633,10 +648,8 @@ class FamilyTreeStore extends ChangeNotifier {
     if (parent.gender == Gender.female && femaleP != null) return false;
     if (parent.gender == Gender.male && maleP != null) return false;
 
-    // 1) link chosen parent
     linkParentChild(parentId: parentId, childId: childId, notify: false);
 
-    // 2) attach spouse/co-parent like addChild()
     final coparentId = _findCoParentPreferSpouse(parentId);
     if (coparentId != null && coparentId != parentId) {
       final cp = getNode(coparentId);
@@ -649,7 +662,6 @@ class FamilyTreeStore extends ChangeNotifier {
       }
     }
 
-    // 3) reposition exactly like addChild()
     child.levelY = parent.levelY + 1;
     child.slotX = _nextChildSlotSmart(parentId);
     child.manualOffset = Offset.zero;
@@ -770,6 +782,30 @@ class _FamilyTreePageState extends State<FamilyTreePage> {
 
   int? _hoveredNodeId;
   Map<int, Offset> _lastLayoutScene = {};
+
+  // ✅ Ctrl-selected tiles (blue outline persists after Ctrl release)
+  final Set<int> _ctrlSelectedIds = <int>{};
+
+  bool get _ctrlPressed {
+    final kb = HardwareKeyboard.instance;
+    return kb.isLogicalKeyPressed(LogicalKeyboardKey.controlLeft) ||
+        kb.isLogicalKeyPressed(LogicalKeyboardKey.controlRight);
+  }
+
+  void _toggleCtrlSelect(int id) {
+    setState(() {
+      if (_ctrlSelectedIds.contains(id)) {
+        _ctrlSelectedIds.remove(id);
+      } else {
+        _ctrlSelectedIds.add(id);
+      }
+    });
+  }
+
+  void _clearCtrlSelection() {
+    if (_ctrlSelectedIds.isEmpty) return;
+    setState(() => _ctrlSelectedIds.clear());
+  }
 
   @override
   void initState() {
@@ -984,6 +1020,8 @@ class _FamilyTreePageState extends State<FamilyTreePage> {
 
     store.clearAll();
     _didInitialCenter = false;
+    _clearCtrlSelection();
+
     _syncingFromController = true;
     _tc.value = Matrix4.identity();
     _syncingFromController = false;
@@ -1005,11 +1043,18 @@ class _FamilyTreePageState extends State<FamilyTreePage> {
       initialDate: clampedInit,
       firstDate: firstDate,
       lastDate: lastDate,
-      helpText: 'Select birthday',
+      helpText: 'Select birthday (or cancel to skip)',
     );
   }
 
   Future<void> _addStandaloneMemberFlow(BuildContext context) async {
+    final name = await _promptText(
+      context,
+      title: 'Member Name',
+      initial: 'New Member',
+    );
+    if (name == null) return;
+
     final chosen = await showModalBottomSheet<Gender>(
       context: context,
       showDragHandle: true,
@@ -1019,8 +1064,7 @@ class _FamilyTreePageState extends State<FamilyTreePage> {
             mainAxisSize: MainAxisSize.min,
             children: [
               const SizedBox(height: 6),
-              const Text('Add Standalone Member',
-                  style: TextStyle(fontWeight: FontWeight.w600)),
+              const Text('Select Gender', style: TextStyle(fontWeight: FontWeight.w600)),
               const SizedBox(height: 8),
               for (final g in const [Gender.female, Gender.male])
                 ListTile(
@@ -1036,13 +1080,6 @@ class _FamilyTreePageState extends State<FamilyTreePage> {
     );
 
     if (chosen == null) return;
-
-    final name = await _promptText(
-      context,
-      title: '${chosen.label} Name',
-      initial: 'New ${chosen.label}',
-    );
-    if (name == null) return;
 
     final pickedBirthday = await _pickBirthday(context, initial: null);
 
@@ -1098,75 +1135,140 @@ class _FamilyTreePageState extends State<FamilyTreePage> {
           ),
           body: Stack(
             children: [
-              InteractiveViewer(
-                transformationController: _tc,
-                constrained: false,
-                boundaryMargin: const EdgeInsets.all(1000000),
-                clipBehavior: Clip.none,
-                minScale: _minZoom,
-                maxScale: _maxZoom,
-                child: SizedBox(
-                  width: canvasSize.width,
-                  height: canvasSize.height,
-                  child: Stack(
-                    clipBehavior: Clip.none,
-                    children: [
-                      if (!isEmpty)
-                        CustomPaint(
-                          size: canvasSize,
-                          painter: _ConnectorPainter(
-                            store: store,
-                            positions: layout,
-                            cardSize: cardSize,
+              // ✅ Tap empty space clears selection (unless you are holding Ctrl for another selection click)
+              GestureDetector(
+                behavior: HitTestBehavior.translucent,
+                onTapDown: (_) {
+                  if (_isLinking) return;
+                  if (_ctrlPressed) return;
+                  _clearCtrlSelection();
+                },
+                child: InteractiveViewer(
+                  transformationController: _tc,
+                  constrained: false,
+                  boundaryMargin: const EdgeInsets.all(1000000),
+                  clipBehavior: Clip.none,
+                  minScale: _minZoom,
+                  maxScale: _maxZoom,
+                  child: SizedBox(
+                    width: canvasSize.width,
+                    height: canvasSize.height,
+                    child: Stack(
+                      clipBehavior: Clip.none,
+                      children: [
+                        if (!isEmpty)
+                          CustomPaint(
+                            size: canvasSize,
+                            painter: _ConnectorPainter(
+                              store: store,
+                              positions: layout,
+                              cardSize: cardSize,
+                            ),
                           ),
-                        ),
-                      for (final entry in layout.entries)
-                        _AnimatedNode(
-                          node: store.getNode(entry.key),
-                          topLeft: entry.value,
-                          size: cardSize,
-                          isHovered: entry.key == _hoveredNodeId ||
-                              (_isLinking && _linkFromNodeId == entry.key),
-                          dragEnabled: !_isLinking,
-                          onHoverChanged: (hovering) {
-                            if (!mounted) return;
-                            setState(() {
-                              if (hovering) {
-                                _hoveredNodeId = entry.key;
-                              } else if (_hoveredNodeId == entry.key) {
-                                _hoveredNodeId = null;
-                              }
-                            });
-                          },
-                          onTap: () => _openNodeActions(context, entry.key),
-                          onDragDelta: (delta) =>
-                              store.addManualOffset(entry.key, delta),
-                          onStartPortDrag: (port, globalStart) {
-                            final topLeft = layout[entry.key]!;
-                            final startScene = switch (port) {
-                              _LinkPort.parentTop =>
-                                Offset(topLeft.dx + cardSize.width / 2, topLeft.dy),
-                              _LinkPort.childBottom => Offset(
-                                  topLeft.dx + cardSize.width / 2,
-                                  topLeft.dy + cardSize.height),
-                              _LinkPort.spouseLeft =>
-                                Offset(topLeft.dx, topLeft.dy + cardSize.height / 2),
-                              _LinkPort.spouseRight => Offset(
-                                  topLeft.dx + cardSize.width,
-                                  topLeft.dy + cardSize.height / 2),
-                            };
+                        for (final entry in layout.entries)
+                          _AnimatedNode(
+                            node: store.getNode(entry.key),
+                            topLeft: entry.value,
+                            size: cardSize,
 
-                            _startLink(
-                              fromNodeId: entry.key,
-                              port: port,
-                              startScene: startScene,
-                              startViewport: _globalToViewport(globalStart),
-                            );
-                          },
-                          onUpdatePortDrag: (g) => _updateLink(_globalToViewport(g)),
-                          onEndPortDrag: (g) => _endLink(_globalToViewport(g)),
-                        ),
-                    ],
+                            // ✅ persistent blue outline ONLY for ctrl-selected tiles
+                            isSelected: _ctrlSelectedIds.contains(entry.key),
+
+                            isHovered: _ctrlSelectedIds.contains(entry.key) ||
+                                entry.key == _hoveredNodeId ||
+                                (_isLinking && _linkFromNodeId == entry.key),
+
+                            dragEnabled: !_isLinking,
+
+                            onHoverChanged: (hovering) {
+                              if (!mounted) return;
+                              setState(() {
+                                if (hovering) {
+                                  _hoveredNodeId = entry.key;
+                                } else if (_hoveredNodeId == entry.key) {
+                                  _hoveredNodeId = null;
+                                }
+                              });
+                            },
+
+                            // ✅ Ctrl+Click toggles selection.
+                            // ✅ If ANY selection exists, block opening the edit/actions sheet.
+                            onTapSelect: (id) {
+                              if (_isLinking) return;
+
+                              if (_ctrlPressed) {
+                                _toggleCtrlSelect(id);
+                                return;
+                              }
+
+                              if (_ctrlSelectedIds.isNotEmpty) {
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  const SnackBar(
+                                    content: Text('Selection active. Ctrl+Click tiles to unselect.'),
+                                  ),
+                                );
+                                return;
+                              }
+
+                              _openNodeActions(context, id);
+                            },
+
+                            onDragStart: () {
+                              if (_isLinking) return;
+
+                              // (Optional) if you Ctrl+drag a tile, ensure it's selected
+                              if (_ctrlPressed && !_ctrlSelectedIds.contains(entry.key)) {
+                                _toggleCtrlSelect(entry.key);
+                              }
+                            },
+
+                            onDragEnd: () {},
+
+                            // ✅ Move the group ONLY if you're dragging a selected tile.
+                            // Otherwise, move just the tile you dragged.
+                            onDragDelta: (delta) {
+                              if (_isLinking) return;
+
+                              final draggedId = entry.key;
+                              final ids = (_ctrlSelectedIds.isNotEmpty &&
+                                      _ctrlSelectedIds.contains(draggedId))
+                                  ? _ctrlSelectedIds
+                                  : <int>{draggedId};
+
+                              if (ids.length == 1) {
+                                store.addManualOffset(draggedId, delta);
+                              } else {
+                                store.addManualOffsetBulk(ids, delta);
+                              }
+                            },
+
+                            onStartPortDrag: (port, globalStart) {
+                              final topLeft = layout[entry.key]!;
+                              final startScene = switch (port) {
+                                _LinkPort.parentTop =>
+                                  Offset(topLeft.dx + cardSize.width / 2, topLeft.dy),
+                                _LinkPort.childBottom => Offset(
+                                    topLeft.dx + cardSize.width / 2,
+                                    topLeft.dy + cardSize.height),
+                                _LinkPort.spouseLeft =>
+                                  Offset(topLeft.dx, topLeft.dy + cardSize.height / 2),
+                                _LinkPort.spouseRight => Offset(
+                                    topLeft.dx + cardSize.width,
+                                    topLeft.dy + cardSize.height / 2),
+                              };
+
+                              _startLink(
+                                fromNodeId: entry.key,
+                                port: port,
+                                startScene: startScene,
+                                startViewport: _globalToViewport(globalStart),
+                              );
+                            },
+                            onUpdatePortDrag: (g) => _updateLink(_globalToViewport(g)),
+                            onEndPortDrag: (g) => _endLink(_globalToViewport(g)),
+                          ),
+                      ],
+                    ),
                   ),
                 ),
               ),
@@ -1176,9 +1278,7 @@ class _FamilyTreePageState extends State<FamilyTreePage> {
                     child: CustomPaint(
                       painter: _LinkPreviewPainter(
                         start: _sceneToViewport(_linkStartScene),
-                        end: (_hoverTargetId != null)
-                            ? _snappedEndViewport
-                            : _linkCurrentViewport,
+                        end: (_hoverTargetId != null) ? _snappedEndViewport : _linkCurrentViewport,
                       ),
                     ),
                   ),
@@ -1299,8 +1399,7 @@ class _FamilyTreePageState extends State<FamilyTreePage> {
 
   void _fitToScreen(Rect bounds) {
     final screenSize = MediaQuery.of(context).size;
-    final scale =
-        min(screenSize.width / bounds.width, screenSize.height / bounds.height) * 0.8;
+    final scale = min(screenSize.width / bounds.width, screenSize.height / bounds.height) * 0.8;
 
     _syncingFromController = true;
     _tc.value = Matrix4.identity()
@@ -1314,6 +1413,13 @@ class _FamilyTreePageState extends State<FamilyTreePage> {
   }
 
   Future<void> _addFirstMemberFlow(BuildContext context) async {
+    final name = await _promptText(
+      context,
+      title: 'First Member Name',
+      initial: 'New Member',
+    );
+    if (name == null) return;
+
     final chosen = await showModalBottomSheet<Gender>(
       context: context,
       showDragHandle: true,
@@ -1340,17 +1446,24 @@ class _FamilyTreePageState extends State<FamilyTreePage> {
 
     if (chosen == null) return;
 
-    final name = await _promptText(
-      context,
-      title: '${chosen.label} Name',
-      initial: 'New ${chosen.label}',
-    );
-    if (name == null) return;
+    final birthday = await _pickBirthday(context, initial: null);
 
-    store.addRoot(name: name, gender: chosen);
+    store.addRoot(
+      name: name,
+      gender: chosen,
+      birthday: birthday,
+    );
   }
 
   Future<void> _openNodeActions(BuildContext context, int nodeId) async {
+    // ✅ HARD BLOCK edits/actions while selection is active
+    if (_ctrlSelectedIds.isNotEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Selection active. Ctrl+Click tiles to unselect first.')),
+      );
+      return;
+    }
+
     final rootContext = context;
 
     await showModalBottomSheet(
@@ -1499,16 +1612,20 @@ class _FamilyTreePageState extends State<FamilyTreePage> {
       return;
     }
 
-    final spouseGender = person.gender.opposite;
-
     final name = await _promptText(
       context,
-      title: '${spouseGender.label} Spouse Name',
-      initial: 'New ${spouseGender.label}',
+      title: 'Spouse Name',
+      initial: 'New Spouse',
     );
     if (name == null) return;
 
-    final added = store.addSpouse(personId: personId, name: name);
+    final birthday = await _pickBirthday(context, initial: null);
+
+    final added = store.addSpouse(
+      personId: personId,
+      name: name,
+      birthday: birthday,
+    );
 
     if (added == null) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -1528,6 +1645,13 @@ class _FamilyTreePageState extends State<FamilyTreePage> {
     }
 
     final (femaleP, maleP) = store.parentPairForPerson(personId);
+
+    final name = await _promptText(
+      context,
+      title: 'Parent Name',
+      initial: 'New Parent',
+    );
+    if (name == null) return;
 
     final options = <Gender>[
       if (femaleP == null) Gender.female,
@@ -1550,8 +1674,7 @@ class _FamilyTreePageState extends State<FamilyTreePage> {
             mainAxisSize: MainAxisSize.min,
             children: [
               const SizedBox(height: 6),
-              const Text('Select Missing Parent Gender',
-                  style: TextStyle(fontWeight: FontWeight.w600)),
+              const Text('Select Parent Gender', style: TextStyle(fontWeight: FontWeight.w600)),
               const SizedBox(height: 8),
               for (final g in options)
                 ListTile(
@@ -1568,14 +1691,14 @@ class _FamilyTreePageState extends State<FamilyTreePage> {
 
     if (chosen == null) return;
 
-    final name = await _promptText(
-      context,
-      title: '${chosen.label} Parent Name',
-      initial: 'New ${chosen.label}',
-    );
-    if (name == null) return;
+    final birthday = await _pickBirthday(context, initial: null);
 
-    final added = store.addParent(personId: personId, parentGender: chosen, name: name);
+    final added = store.addParent(
+      personId: personId,
+      parentGender: chosen,
+      name: name,
+      birthday: birthday,
+    );
     if (added == null) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Could not add parent (blocked).')),
@@ -1584,6 +1707,13 @@ class _FamilyTreePageState extends State<FamilyTreePage> {
   }
 
   Future<void> _addChildFlow(BuildContext context, {required int fromNodeId}) async {
+    final name = await _promptText(
+      context,
+      title: 'Child Name',
+      initial: 'New Child',
+    );
+    if (name == null) return;
+
     final chosen = await showModalBottomSheet<Gender>(
       context: context,
       showDragHandle: true,
@@ -1610,14 +1740,14 @@ class _FamilyTreePageState extends State<FamilyTreePage> {
 
     if (chosen == null) return;
 
-    final name = await _promptText(
-      context,
-      title: '${chosen.label} Child Name',
-      initial: 'New ${chosen.label}',
-    );
-    if (name == null) return;
+    final birthday = await _pickBirthday(context, initial: null);
 
-    store.addChild(fromNodeId: fromNodeId, name: name, childGender: chosen);
+    store.addChild(
+      fromNodeId: fromNodeId,
+      name: name,
+      childGender: chosen,
+      birthday: birthday,
+    );
   }
 
   Future<String?> _promptText(
@@ -1662,12 +1792,15 @@ class _AnimatedNode extends StatefulWidget {
     required this.node,
     required this.topLeft,
     required this.size,
-    required this.onTap,
+    required this.onTapSelect,
     required this.onDragDelta,
+    required this.onDragStart,
+    required this.onDragEnd,
     required this.onStartPortDrag,
     required this.onUpdatePortDrag,
     required this.onEndPortDrag,
     required this.isHovered,
+    required this.isSelected,
     required this.onHoverChanged,
     required this.dragEnabled,
   });
@@ -1675,14 +1808,19 @@ class _AnimatedNode extends StatefulWidget {
   final FamilyNode node;
   final Offset topLeft;
   final Size size;
-  final VoidCallback onTap;
+
+  final ValueChanged<int> onTapSelect;
+
   final ValueChanged<Offset> onDragDelta;
+  final VoidCallback onDragStart;
+  final VoidCallback onDragEnd;
 
   final void Function(_LinkPort port, Offset globalStart) onStartPortDrag;
   final void Function(Offset globalPos) onUpdatePortDrag;
   final void Function(Offset globalPos) onEndPortDrag;
 
   final bool isHovered;
+  final bool isSelected;
   final ValueChanged<bool> onHoverChanged;
   final bool dragEnabled;
 
@@ -1710,13 +1848,16 @@ class _AnimatedNodeState extends State<_AnimatedNode> {
         },
         onHover: (e) => setState(() => _hoverLocal = e.localPosition),
         child: GestureDetector(
-          onTap: widget.onTap,
+          onTap: () => widget.onTapSelect(widget.node.id),
+          onPanStart: widget.dragEnabled ? (_) => widget.onDragStart() : null,
           onPanUpdate: widget.dragEnabled ? (d) => widget.onDragDelta(d.delta) : null,
+          onPanEnd: widget.dragEnabled ? (_) => widget.onDragEnd() : null,
           child: _MemberCard(
             node: widget.node,
             showPorts: widget.isHovered,
             hoverLocal: _hoverLocal,
             size: widget.size,
+            isSelected: widget.isSelected,
             onStartPortDrag: widget.onStartPortDrag,
             onUpdatePortDrag: widget.onUpdatePortDrag,
             onEndPortDrag: widget.onEndPortDrag,
@@ -1733,6 +1874,7 @@ class _MemberCard extends StatelessWidget {
     required this.showPorts,
     required this.hoverLocal,
     required this.size,
+    required this.isSelected,
     required this.onStartPortDrag,
     required this.onUpdatePortDrag,
     required this.onEndPortDrag,
@@ -1742,6 +1884,8 @@ class _MemberCard extends StatelessWidget {
   final bool showPorts;
   final Offset? hoverLocal;
   final Size size;
+
+  final bool isSelected;
 
   final void Function(_LinkPort port, Offset globalStart) onStartPortDrag;
   final void Function(Offset globalPos) onUpdatePortDrag;
@@ -1798,109 +1942,116 @@ class _MemberCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final activePort = _nearestAllowedPort();
 
-    return Material(
-      elevation: 2,
-      shadowColor: Colors.black12,
-      borderRadius: BorderRadius.circular(16),
-      color: Colors.white,
-      child: Stack(
-        clipBehavior: Clip.none,
-        children: [
-          InkWell(
-            borderRadius: BorderRadius.circular(16),
-            child: Padding(
-              padding: const EdgeInsets.all(10),
-              child: Row(
-                children: [
-                  Container(
-                    width: 42,
-                    height: 42,
-                    decoration: BoxDecoration(
-                      color: node.gender.tone,
-                      borderRadius: BorderRadius.circular(12),
+    return Container(
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(16),
+        // ✅ Blue outline persists only for Ctrl-selected tiles
+        border: isSelected ? Border.all(color: const Color(0xFF4C7DFF), width: 2) : null,
+      ),
+      child: Material(
+        elevation: 2,
+        shadowColor: Colors.black12,
+        borderRadius: BorderRadius.circular(16),
+        color: Colors.white,
+        child: Stack(
+          clipBehavior: Clip.none,
+          children: [
+            InkWell(
+              borderRadius: BorderRadius.circular(16),
+              child: Padding(
+                padding: const EdgeInsets.all(10),
+                child: Row(
+                  children: [
+                    Container(
+                      width: 42,
+                      height: 42,
+                      decoration: BoxDecoration(
+                        color: node.gender.tone,
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      child: Icon(node.gender.icon, color: Colors.black87),
                     ),
-                    child: Icon(node.gender.icon, color: Colors.black87),
-                  ),
-                  const SizedBox(width: 10),
-                  Expanded(
-                    child: Column(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          node.name,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: const TextStyle(fontWeight: FontWeight.w700),
-                        ),
-                        const SizedBox(height: 4),
-                        Text(
-                          node.gender.label,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: TextStyle(color: Colors.grey.shade700, fontSize: 12),
-                        ),
-                        if (node.birthday != null) ...[
-                          const SizedBox(height: 2),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: Column(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
                           Text(
-                            _formatDate(node.birthday!),
+                            node.name,
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis,
-                            style: TextStyle(color: Colors.grey.shade600, fontSize: 12),
+                            style: const TextStyle(fontWeight: FontWeight.w700),
                           ),
+                          const SizedBox(height: 4),
+                          Text(
+                            node.gender.label,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(color: Colors.grey.shade700, fontSize: 12),
+                          ),
+                          if (node.birthday != null) ...[
+                            const SizedBox(height: 2),
+                            Text(
+                              _formatDate(node.birthday!),
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: TextStyle(color: Colors.grey.shade600, fontSize: 12),
+                            ),
+                          ],
                         ],
-                      ],
+                      ),
                     ),
-                  ),
-                ],
+                  ],
+                ),
               ),
             ),
-          ),
-          if (activePort == _LinkPort.parentTop)
-            Positioned(
-              top: -10,
-              left: (size.width / 2) - 10,
-              child: _PlusPort(
-                tooltip: 'Connect Parent',
-                onStart: (g) => onStartPortDrag(_LinkPort.parentTop, g),
-                onUpdate: onUpdatePortDrag,
-                onEnd: onEndPortDrag,
+            if (activePort == _LinkPort.parentTop)
+              Positioned(
+                top: -10,
+                left: (size.width / 2) - 10,
+                child: _PlusPort(
+                  tooltip: 'Connect Parent',
+                  onStart: (g) => onStartPortDrag(_LinkPort.parentTop, g),
+                  onUpdate: onUpdatePortDrag,
+                  onEnd: onEndPortDrag,
+                ),
               ),
-            ),
-          if (activePort == _LinkPort.childBottom)
-            Positioned(
-              bottom: -10,
-              left: (size.width / 2) - 10,
-              child: _PlusPort(
-                tooltip: 'Connect Child',
-                onStart: (g) => onStartPortDrag(_LinkPort.childBottom, g),
-                onUpdate: onUpdatePortDrag,
-                onEnd: onEndPortDrag,
+            if (activePort == _LinkPort.childBottom)
+              Positioned(
+                bottom: -10,
+                left: (size.width / 2) - 10,
+                child: _PlusPort(
+                  tooltip: 'Connect Child',
+                  onStart: (g) => onStartPortDrag(_LinkPort.childBottom, g),
+                  onUpdate: onUpdatePortDrag,
+                  onEnd: onEndPortDrag,
+                ),
               ),
-            ),
-          if (activePort == _LinkPort.spouseLeft)
-            Positioned(
-              left: -10,
-              top: (size.height / 2) - 10,
-              child: _PlusPort(
-                tooltip: 'Connect Spouse',
-                onStart: (g) => onStartPortDrag(_LinkPort.spouseLeft, g),
-                onUpdate: onUpdatePortDrag,
-                onEnd: onEndPortDrag,
+            if (activePort == _LinkPort.spouseLeft)
+              Positioned(
+                left: -10,
+                top: (size.height / 2) - 10,
+                child: _PlusPort(
+                  tooltip: 'Connect Spouse',
+                  onStart: (g) => onStartPortDrag(_LinkPort.spouseLeft, g),
+                  onUpdate: onUpdatePortDrag,
+                  onEnd: onEndPortDrag,
+                ),
               ),
-            ),
-          if (activePort == _LinkPort.spouseRight)
-            Positioned(
-              right: -10,
-              top: (size.height / 2) - 10,
-              child: _PlusPort(
-                tooltip: 'Connect Spouse',
-                onStart: (g) => onStartPortDrag(_LinkPort.spouseRight, g),
-                onUpdate: onUpdatePortDrag,
-                onEnd: onEndPortDrag,
+            if (activePort == _LinkPort.spouseRight)
+              Positioned(
+                right: -10,
+                top: (size.height / 2) - 10,
+                child: _PlusPort(
+                  tooltip: 'Connect Spouse',
+                  onStart: (g) => onStartPortDrag(_LinkPort.spouseRight, g),
+                  onUpdate: onUpdatePortDrag,
+                  onEnd: onEndPortDrag,
+                ),
               ),
-            ),
-        ],
+          ],
+        ),
       ),
     );
   }
