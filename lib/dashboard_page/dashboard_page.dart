@@ -22,91 +22,85 @@ class DashboardPage extends StatelessWidget {
   }
 }
 
-/// ✅ Every member has gender via Kind (no "unknown").
 enum Gender { female, male }
 
-/// ✅ Replace "child" with "son/daughter". Parents are still mother/father.
-enum Kind { mother, father, son, daughter }
-
-extension KindUi on Kind {
-  Gender get gender => switch (this) {
-        Kind.mother => Gender.female,
-        Kind.daughter => Gender.female,
-        Kind.father => Gender.male,
-        Kind.son => Gender.male,
-      };
-
+extension GenderUi on Gender {
   String get label => switch (this) {
-        Kind.mother => 'Mother',
-        Kind.father => 'Father',
-        Kind.son => 'Son',
-        Kind.daughter => 'Daughter',
+        Gender.female => 'Female',
+        Gender.male => 'Male',
       };
 
   IconData get icon => switch (this) {
-        Kind.mother => Icons.female,
-        Kind.daughter => Icons.girl,
-        Kind.father => Icons.male,
-        Kind.son => Icons.boy,
+        Gender.female => Icons.female,
+        Gender.male => Icons.male,
+      };
+
+  Color get tone => switch (this) {
+        Gender.female => const Color(0xFFEAF3FF),
+        Gender.male => const Color(0xFFEFF8F1),
+      };
+
+  Gender get opposite => switch (this) {
+        Gender.female => Gender.male,
+        Gender.male => Gender.female,
       };
 }
 
-/// In-memory node model (bi-directional relationships).
+String _formatDate(DateTime d) {
+  const months = [
+    'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+    'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'
+  ];
+  final m = months[d.month - 1];
+  return '$m ${d.day}, ${d.year}';
+}
+
 class FamilyNode {
   FamilyNode({
     required this.id,
     required this.name,
-    required this.kind,
+    required this.gender,
     required this.levelY,
     required this.slotX,
+    this.birthday,
   });
 
   final int id;
   String name;
+  Gender gender;
 
-  /// ✅ Fixed label (Mother/Father/Son/Daughter) and implies gender.
-  Kind kind;
-
-  Gender get gender => kind.gender;
-
-  /// Parents/children stored as IDs for simplicity & stability.
   final Set<int> parents = {};
   final Set<int> children = {};
-
-  /// ✅ Spouse links (bi-directional)
   final Set<int> spouses = {};
 
-  /// ✅ Persistent layout metadata (NO global recompute).
   int levelY;
-
-  /// Stable horizontal "slot" (like a column)
   double slotX;
 
-  /// Optional manual offset: drag a node and it nudges from auto-layout.
   Offset manualOffset = Offset.zero;
+  DateTime? birthday;
 }
 
-/// Simple in-memory graph store + relationship helpers.
 class FamilyTreeStore extends ChangeNotifier {
   final Map<int, FamilyNode> _nodes = {};
   int _nextId = 1;
-
   int? lastAddedId;
 
   Map<int, FamilyNode> get nodes => _nodes;
 
   FamilyNode createNode({
     required String name,
-    required Kind kind,
+    required Gender gender,
     required int levelY,
     required double slotX,
+    DateTime? birthday,
   }) {
     final node = FamilyNode(
       id: _nextId++,
       name: name,
-      kind: kind,
+      gender: gender,
       levelY: levelY,
       slotX: slotX,
+      birthday: birthday,
     );
     _nodes[node.id] = node;
     lastAddedId = node.id;
@@ -115,7 +109,12 @@ class FamilyTreeStore extends ChangeNotifier {
 
   FamilyNode getNode(int id) => _nodes[id]!;
 
-  /// Ensures parent<->child linkage is always bi-directional.
+  void setBirthday(int id, DateTime? date) {
+    if (!_nodes.containsKey(id)) return;
+    getNode(id).birthday = date;
+    notifyListeners();
+  }
+
   void linkParentChild({
     required int parentId,
     required int childId,
@@ -133,7 +132,6 @@ class FamilyTreeStore extends ChangeNotifier {
     if (notify) notifyListeners();
   }
 
-  /// ✅ Spouse linkage is always bi-directional.
   void linkSpouses({required int aId, required int bId, bool notify = true}) {
     if (aId == bId) return;
     if (!_nodes.containsKey(aId) || !_nodes.containsKey(bId)) return;
@@ -159,21 +157,19 @@ class FamilyTreeStore extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// ✅ "Mother/Father slot" is determined by parent gender (from Kind).
-  (int? motherId, int? fatherId) parentPairForPerson(int personId) {
-    int? mother;
-    int? father;
+  (int? femaleParentId, int? maleParentId) parentPairForPerson(int personId) {
+    int? femaleP;
+    int? maleP;
     final person = getNode(personId);
 
     for (final pid in person.parents) {
       final p = getNode(pid);
-      if (p.gender == Gender.female) mother ??= pid;
-      if (p.gender == Gender.male) father ??= pid;
+      if (p.gender == Gender.female) femaleP ??= pid;
+      if (p.gender == Gender.male) maleP ??= pid;
     }
-    return (mother, father);
+    return (femaleP, maleP);
   }
 
-  /// ✅ NEW: true if this person already has a co-parent via any shared child.
   bool hasCoParentViaChildren(int personId) {
     final person = getNode(personId);
     for (final childId in person.children) {
@@ -185,7 +181,6 @@ class FamilyTreeStore extends ChangeNotifier {
     return false;
   }
 
-  /// Finds a co-parent for `from` (based on any shared existing child).
   int? _findCoParentBySharedChild(int fromNodeId) {
     final from = getNode(fromNodeId);
     for (final existingChildId in from.children) {
@@ -197,25 +192,12 @@ class FamilyTreeStore extends ChangeNotifier {
     return null;
   }
 
-  /// Prefer spouse as co-parent (if present), otherwise fall back to shared-child logic.
   int? _findCoParentPreferSpouse(int fromNodeId) {
     final sp = spouseOf(fromNodeId);
     if (sp != null) return sp;
     return _findCoParentBySharedChild(fromNodeId);
   }
 
-  /// ✅ Spouse kind options (opposite gender) — NO "Son" and NO "Daughter"
-  List<Kind> allowedSpouseKindsFor(Kind personKind) {
-    final wantsFemale = personKind.gender == Gender.male;
-    if (wantsFemale) return const [Kind.mother];
-    return const [Kind.father];
-  }
-
-  // -------------------------------------------------------------------
-  // ✅ Slot picking that avoids drift + avoids overlaps when crowded
-  // -------------------------------------------------------------------
-
-  /// ✅ Find nearest free slot at a given level, centered around an anchor slot.
   double _nearestFreeSlotAtLevel({
     required int levelY,
     required double anchorSlot,
@@ -275,14 +257,15 @@ class FamilyTreeStore extends ChangeNotifier {
 
   double _newParentSlot({
     required int personId,
-    required Kind parentKind,
+    required Gender newParentGender,
     required int? existingOtherParentId,
   }) {
     final person = getNode(personId);
     if (existingOtherParentId == null) return person.slotX;
 
     final other = getNode(existingOtherParentId);
-    if (parentKind == Kind.mother) {
+
+    if (newParentGender == Gender.female) {
       return min(other.slotX, person.slotX) - 1;
     } else {
       return max(other.slotX, person.slotX) + 1;
@@ -291,28 +274,22 @@ class FamilyTreeStore extends ChangeNotifier {
 
   void _linkNewParentToSharedChildren({
     required int newParentId,
-    required Kind newParentKind,
+    required Gender newParentGender,
     required int otherParentId,
   }) {
     final otherParent = getNode(otherParentId);
-    final newGender = newParentKind.gender;
 
     for (final childId in otherParent.children) {
-      final child = getNode(childId);
+      if (!_nodes.containsKey(childId)) continue;
+      final (femaleP, maleP) = parentPairForPerson(childId);
 
-      if (child.parents.contains(newParentId)) continue;
-
-      final (motherId, fatherId) = parentPairForPerson(childId);
-      if (newGender == Gender.female && motherId != null) continue;
-      if (newGender == Gender.male && fatherId != null) continue;
+      if (childId == newParentId) continue;
+      if (newParentGender == Gender.female && femaleP != null) continue;
+      if (newParentGender == Gender.male && maleP != null) continue;
 
       linkParentChild(parentId: newParentId, childId: childId, notify: false);
     }
   }
-
-  // -------------------------------------------------------------------
-  // ✅ Anti-overlap + Anti-drift stabilization (slot-based, stable)
-  // -------------------------------------------------------------------
 
   static const int _minSlotGap = 1;
 
@@ -385,25 +362,19 @@ class FamilyTreeStore extends ChangeNotifier {
     _anchorToRoot();
   }
 
-  /// ✅ NEW: Delete a member and remove all related links.
   void deleteNode(int id) {
     if (!_nodes.containsKey(id)) return;
 
     final node = getNode(id);
 
     for (final pid in node.parents.toList()) {
-      final p = _nodes[pid];
-      if (p != null) p.children.remove(id);
+      _nodes[pid]?.children.remove(id);
     }
-
     for (final cid in node.children.toList()) {
-      final c = _nodes[cid];
-      if (c != null) c.parents.remove(id);
+      _nodes[cid]?.parents.remove(id);
     }
-
     for (final sid in node.spouses.toList()) {
-      final s = _nodes[sid];
-      if (s != null) s.spouses.remove(id);
+      _nodes[sid]?.spouses.remove(id);
     }
 
     _nodes.remove(id);
@@ -418,17 +389,53 @@ class FamilyTreeStore extends ChangeNotifier {
 
   FamilyNode addRoot({
     required String name,
-    required Kind kind,
+    required Gender gender,
   }) {
     final root = createNode(
       name: name,
-      kind: kind,
+      gender: gender,
       levelY: 0,
       slotX: 0,
     );
     _stabilizeLayout();
     notifyListeners();
     return root;
+  }
+
+  FamilyNode addStandalone({
+    required String name,
+    required Gender gender,
+    DateTime? birthday,
+  }) {
+    const level = 0;
+
+    double anchor = 0;
+    bool anyAtLevel = false;
+
+    for (final n in _nodes.values) {
+      if (n.levelY == level) {
+        anyAtLevel = true;
+        anchor = max(anchor, n.slotX);
+      }
+    }
+
+    final slot = _nearestFreeSlotAtLevel(
+      levelY: level,
+      anchorSlot: anyAtLevel ? (anchor + 1) : 0,
+      preferLeft: false,
+    );
+
+    final node = createNode(
+      name: name,
+      gender: gender,
+      levelY: level,
+      slotX: slot,
+      birthday: birthday,
+    );
+
+    _stabilizeLayout();
+    notifyListeners();
+    return node;
   }
 
   void _backfillSpouseAsCoParent({
@@ -439,21 +446,19 @@ class FamilyTreeStore extends ChangeNotifier {
     final spouse = getNode(spouseId);
 
     for (final childId in person.children) {
-      final (motherId, fatherId) = parentPairForPerson(childId);
-
-      if (spouse.gender == Gender.female && motherId == null) {
+      final (femaleP, maleP) = parentPairForPerson(childId);
+      if (spouse.gender == Gender.female && femaleP == null) {
         linkParentChild(parentId: spouseId, childId: childId, notify: false);
-      } else if (spouse.gender == Gender.male && fatherId == null) {
+      } else if (spouse.gender == Gender.male && maleP == null) {
         linkParentChild(parentId: spouseId, childId: childId, notify: false);
       }
     }
 
     for (final childId in spouse.children) {
-      final (motherId, fatherId) = parentPairForPerson(childId);
-
-      if (person.gender == Gender.female && motherId == null) {
+      final (femaleP, maleP) = parentPairForPerson(childId);
+      if (person.gender == Gender.female && femaleP == null) {
         linkParentChild(parentId: personId, childId: childId, notify: false);
-      } else if (person.gender == Gender.male && fatherId == null) {
+      } else if (person.gender == Gender.male && maleP == null) {
         linkParentChild(parentId: personId, childId: childId, notify: false);
       }
     }
@@ -461,15 +466,13 @@ class FamilyTreeStore extends ChangeNotifier {
 
   FamilyNode? addSpouse({
     required int personId,
-    required Kind spouseKind,
     required String name,
   }) {
     final person = getNode(personId);
-
     if (person.spouses.isNotEmpty) return null;
-    if (spouseKind.gender == person.gender) return null;
 
-    final preferLeft = spouseKind.gender == Gender.female;
+    final spouseGender = person.gender.opposite;
+    final preferLeft = spouseGender == Gender.female;
     final anchor = person.slotX + (preferLeft ? -1 : 1);
 
     final slot = _nearestFreeSlotAtLevel(
@@ -480,7 +483,7 @@ class FamilyTreeStore extends ChangeNotifier {
 
     final spouse = createNode(
       name: name,
-      kind: spouseKind,
+      gender: spouseGender,
       levelY: person.levelY,
       slotX: slot,
     );
@@ -495,28 +498,25 @@ class FamilyTreeStore extends ChangeNotifier {
 
   FamilyNode? addParent({
     required int personId,
-    required Kind parentKind,
+    required Gender parentGender,
     required String name,
   }) {
-    if (parentKind != Kind.mother && parentKind != Kind.father) return null;
-
     final person = getNode(personId);
-
     if (person.parents.length >= 2) return null;
 
-    final (motherId, fatherId) = parentPairForPerson(personId);
-    if (parentKind == Kind.mother && motherId != null) return null;
-    if (parentKind == Kind.father && fatherId != null) return null;
+    final (femaleP, maleP) = parentPairForPerson(personId);
+    if (parentGender == Gender.female && femaleP != null) return null;
+    if (parentGender == Gender.male && maleP != null) return null;
 
-    final otherParentId = parentKind == Kind.mother ? fatherId : motherId;
+    final otherParentId = parentGender == Gender.female ? maleP : femaleP;
 
     final parent = createNode(
       name: name,
-      kind: parentKind,
+      gender: parentGender,
       levelY: person.levelY - 1,
       slotX: _newParentSlot(
         personId: personId,
-        parentKind: parentKind,
+        newParentGender: parentGender,
         existingOtherParentId: otherParentId,
       ),
     );
@@ -526,7 +526,7 @@ class FamilyTreeStore extends ChangeNotifier {
     if (otherParentId != null) {
       _linkNewParentToSharedChildren(
         newParentId: parent.id,
-        newParentKind: parentKind,
+        newParentGender: parentGender,
         otherParentId: otherParentId,
       );
     }
@@ -539,18 +539,14 @@ class FamilyTreeStore extends ChangeNotifier {
   FamilyNode addChild({
     required int fromNodeId,
     required String name,
-    required Kind childKind,
+    required Gender childGender,
   }) {
-    if (childKind != Kind.son && childKind != Kind.daughter) {
-      throw ArgumentError('childKind must be Kind.son or Kind.daughter');
-    }
-
     final from = getNode(fromNodeId);
     final slot = _nextChildSlotSmart(fromNodeId);
 
     final child = createNode(
       name: name,
-      kind: childKind,
+      gender: childGender,
       levelY: from.levelY + 1,
       slotX: slot,
     );
@@ -579,56 +575,84 @@ class FamilyTreeStore extends ChangeNotifier {
     notifyListeners();
   }
 
-  // -------------------------------------------------------------------
-  // ✅ Connect EXISTING tiles by drag-to-connect (ports)
-  // -------------------------------------------------------------------
+  // ------------------------------------------------------------
+  // ✅ DRAG-LINK RULES (FINAL): both directions behave like addChild()
+  // ------------------------------------------------------------
 
+  // ✅ FINAL: if you connect child TOP (+) -> parent, still auto-add spouse/co-parent & reposition
   bool tryLinkExistingParent({required int parentId, required int childId}) {
-    if (!_nodes.containsKey(parentId) || !_nodes.containsKey(childId)) {
-      return false;
-    }
+    if (!_nodes.containsKey(parentId) || !_nodes.containsKey(childId)) return false;
     if (parentId == childId) return false;
 
     final parent = getNode(parentId);
     final child = getNode(childId);
 
-    if (parent.kind != Kind.mother && parent.kind != Kind.father) return false;
     if (child.parents.length >= 2) return false;
 
-    final (motherId, fatherId) = parentPairForPerson(childId);
+    final (femaleP, maleP) = parentPairForPerson(childId);
+    if (parent.gender == Gender.female && femaleP != null) return false;
+    if (parent.gender == Gender.male && maleP != null) return false;
 
-    if (parent.gender == Gender.female && motherId != null) return false;
-    if (parent.gender == Gender.male && fatherId != null) return false;
+    // 1) link chosen parent
+    linkParentChild(parentId: parentId, childId: childId, notify: false);
 
-    linkParentChild(parentId: parentId, childId: childId, notify: true);
+    // 2) attach spouse/co-parent like addChild()
+    final coparentId = _findCoParentPreferSpouse(parentId);
+    if (coparentId != null && coparentId != parentId) {
+      final cp = getNode(coparentId);
+      final (f2, m2) = parentPairForPerson(childId);
+      final canAttach = (cp.gender == Gender.female && f2 == null) ||
+          (cp.gender == Gender.male && m2 == null);
+
+      if (canAttach && !child.parents.contains(coparentId)) {
+        linkParentChild(parentId: coparentId, childId: childId, notify: false);
+      }
+    }
+
+    // 3) reposition exactly like addChild()
+    child.levelY = parent.levelY + 1;
+    child.slotX = _nextChildSlotSmart(parentId);
+    child.manualOffset = Offset.zero;
+
     _stabilizeLayout();
     notifyListeners();
     return true;
   }
 
+  // ✅ FINAL: if you connect parent BOTTOM (+) -> child, still auto-add spouse/co-parent & reposition
   bool tryLinkExistingChild({required int parentId, required int childId}) {
-    if (!_nodes.containsKey(parentId) || !_nodes.containsKey(childId)) {
-      return false;
-    }
+    if (!_nodes.containsKey(parentId) || !_nodes.containsKey(childId)) return false;
     if (parentId == childId) return false;
 
     final parent = getNode(parentId);
     final child = getNode(childId);
 
-    if (child.kind != Kind.son && child.kind != Kind.daughter) return false;
     if (child.parents.length >= 2) return false;
 
-    final (motherId, fatherId) = parentPairForPerson(childId);
+    final (femaleP, maleP) = parentPairForPerson(childId);
+    if (parent.gender == Gender.female && femaleP != null) return false;
+    if (parent.gender == Gender.male && maleP != null) return false;
 
-    if (parent.gender == Gender.female && motherId != null) return false;
-    if (parent.gender == Gender.male && fatherId != null) return false;
+    // 1) link chosen parent
+    linkParentChild(parentId: parentId, childId: childId, notify: false);
 
-    linkParentChild(parentId: parentId, childId: childId, notify: true);
+    // 2) attach spouse/co-parent like addChild()
+    final coparentId = _findCoParentPreferSpouse(parentId);
+    if (coparentId != null && coparentId != parentId) {
+      final cp = getNode(coparentId);
+      final (f2, m2) = parentPairForPerson(childId);
+      final canAttach = (cp.gender == Gender.female && f2 == null) ||
+          (cp.gender == Gender.male && m2 == null);
 
-    final sp = spouseOf(parentId);
-    if (sp != null) {
-      _backfillSpouseAsCoParent(personId: parentId, spouseId: sp);
+      if (canAttach && !child.parents.contains(coparentId)) {
+        linkParentChild(parentId: coparentId, childId: childId, notify: false);
+      }
     }
+
+    // 3) reposition exactly like addChild()
+    child.levelY = parent.levelY + 1;
+    child.slotX = _nextChildSlotSmart(parentId);
+    child.manualOffset = Offset.zero;
 
     _stabilizeLayout();
     notifyListeners();
@@ -649,7 +673,6 @@ class FamilyTreeStore extends ChangeNotifier {
 
     linkSpouses(aId: aId, bId: bId, notify: false);
 
-    // ✅ Backfill BOTH ways
     _backfillSpouseAsCoParent(personId: aId, spouseId: bId);
     _backfillSpouseAsCoParent(personId: bId, spouseId: aId);
 
@@ -715,19 +738,14 @@ class FamilyTreePage extends StatefulWidget {
   State<FamilyTreePage> createState() => _FamilyTreePageState();
 }
 
-/// ✅ Ports meaning:
-/// - Top    => Parents
-/// - Bottom => Children
-/// - Sides  => Spouse
 enum _LinkPort { parentTop, childBottom, spouseLeft, spouseRight }
 
 class _FamilyTreePageState extends State<FamilyTreePage> {
   late final FamilyTreeStore store;
 
-  static const Size cardSize = Size(170, 72);
+  static const Size cardSize = Size(170, 84);
   static const double hGap = 40;
   static const double vGap = 70;
-
   static const double virtualSize = 100000;
 
   final TransformationController _tc = TransformationController();
@@ -739,23 +757,18 @@ class _FamilyTreePageState extends State<FamilyTreePage> {
   double _zoomValue = 1.0;
   bool _syncingFromController = false;
 
-  // ✅ Drag-to-connect state
   bool _isLinking = false;
   int? _linkFromNodeId;
   _LinkPort? _linkPort;
   Offset _linkStartScene = Offset.zero;
   Offset _linkCurrentViewport = Offset.zero;
 
-  // ✅ Snap state
   int? _hoverTargetId;
   Offset _snappedEndViewport = Offset.zero;
 
   static const double _snapRadius = 70.0;
 
-  // ✅ Tile hover id (desktop/web)
   int? _hoveredNodeId;
-
-  // ✅ Keep last computed layout (scene coords)
   Map<int, Offset> _lastLayoutScene = {};
 
   @override
@@ -806,8 +819,6 @@ class _FamilyTreePageState extends State<FamilyTreePage> {
     if (box == null) return Offset.zero;
     return box.globalToLocal(global);
   }
-
-  // ---------------- SNAP / MAGNET HELPERS ----------------
 
   double _distancePointToRect(Offset p, Rect r) {
     final dx = (p.dx < r.left)
@@ -860,8 +871,6 @@ class _FamilyTreePageState extends State<FamilyTreePage> {
     return (bestDist <= _snapRadius) ? bestId : null;
   }
 
-  // ---------------- LINKING (FAST + SNAP) ----------------
-
   void _startLink({
     required int fromNodeId,
     required _LinkPort port,
@@ -876,7 +885,6 @@ class _FamilyTreePageState extends State<FamilyTreePage> {
       _linkCurrentViewport = startViewport;
       _hoverTargetId = null;
       _snappedEndViewport = startViewport;
-
       _hoveredNodeId = fromNodeId;
     });
 
@@ -885,12 +893,10 @@ class _FamilyTreePageState extends State<FamilyTreePage> {
 
   void _updateLink(Offset viewportPoint) {
     if (!_isLinking) return;
-
     final fromId = _linkFromNodeId;
     if (fromId == null) return;
 
     final targetId = _nearestNodeInViewport(viewportPoint, excludeId: fromId);
-
     Offset snapped = viewportPoint;
 
     if (targetId != null) {
@@ -950,9 +956,7 @@ class _FamilyTreePageState extends State<FamilyTreePage> {
 
     if (!ok) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Cannot connect these tiles (rules blocked).'),
-        ),
+        const SnackBar(content: Text('Cannot connect these tiles (rules blocked).')),
       );
     }
   }
@@ -984,6 +988,69 @@ class _FamilyTreePageState extends State<FamilyTreePage> {
     _tc.value = Matrix4.identity();
     _syncingFromController = false;
     setState(() => _zoomValue = 1.0);
+  }
+
+  Future<DateTime?> _pickBirthday(BuildContext context, {DateTime? initial}) async {
+    final now = DateTime.now();
+    final firstDate = DateTime(1900, 1, 1);
+    final lastDate = DateTime(now.year, now.month, now.day);
+
+    final init = initial ?? DateTime(1990, 1, 1);
+    final clampedInit = init.isBefore(firstDate)
+        ? firstDate
+        : (init.isAfter(lastDate) ? lastDate : init);
+
+    return showDatePicker(
+      context: context,
+      initialDate: clampedInit,
+      firstDate: firstDate,
+      lastDate: lastDate,
+      helpText: 'Select birthday',
+    );
+  }
+
+  Future<void> _addStandaloneMemberFlow(BuildContext context) async {
+    final chosen = await showModalBottomSheet<Gender>(
+      context: context,
+      showDragHandle: true,
+      builder: (ctx) {
+        return SafeArea(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const SizedBox(height: 6),
+              const Text('Add Standalone Member',
+                  style: TextStyle(fontWeight: FontWeight.w600)),
+              const SizedBox(height: 8),
+              for (final g in const [Gender.female, Gender.male])
+                ListTile(
+                  leading: Icon(g.icon),
+                  title: Text(g.label),
+                  onTap: () => Navigator.pop(ctx, g),
+                ),
+              const SizedBox(height: 12),
+            ],
+          ),
+        );
+      },
+    );
+
+    if (chosen == null) return;
+
+    final name = await _promptText(
+      context,
+      title: '${chosen.label} Name',
+      initial: 'New ${chosen.label}',
+    );
+    if (name == null) return;
+
+    final pickedBirthday = await _pickBirthday(context, initial: null);
+
+    store.addStandalone(
+      name: name,
+      gender: chosen,
+      birthday: pickedBirthday,
+    );
   }
 
   @override
@@ -1060,8 +1127,7 @@ class _FamilyTreePageState extends State<FamilyTreePage> {
                           size: cardSize,
                           isHovered: entry.key == _hoveredNodeId ||
                               (_isLinking && _linkFromNodeId == entry.key),
-                          dragEnabled:
-                              !_isLinking, // ✅ FIX: prevent tile drag while linking
+                          dragEnabled: !_isLinking,
                           onHoverChanged: (hovering) {
                             if (!mounted) return;
                             setState(() {
@@ -1078,13 +1144,13 @@ class _FamilyTreePageState extends State<FamilyTreePage> {
                           onStartPortDrag: (port, globalStart) {
                             final topLeft = layout[entry.key]!;
                             final startScene = switch (port) {
-                              _LinkPort.parentTop => Offset(
-                                  topLeft.dx + cardSize.width / 2, topLeft.dy),
+                              _LinkPort.parentTop =>
+                                Offset(topLeft.dx + cardSize.width / 2, topLeft.dy),
                               _LinkPort.childBottom => Offset(
                                   topLeft.dx + cardSize.width / 2,
                                   topLeft.dy + cardSize.height),
-                              _LinkPort.spouseLeft => Offset(topLeft.dx,
-                                  topLeft.dy + cardSize.height / 2),
+                              _LinkPort.spouseLeft =>
+                                Offset(topLeft.dx, topLeft.dy + cardSize.height / 2),
                               _LinkPort.spouseRight => Offset(
                                   topLeft.dx + cardSize.width,
                                   topLeft.dy + cardSize.height / 2),
@@ -1097,15 +1163,13 @@ class _FamilyTreePageState extends State<FamilyTreePage> {
                               startViewport: _globalToViewport(globalStart),
                             );
                           },
-                          onUpdatePortDrag: (g) =>
-                              _updateLink(_globalToViewport(g)),
+                          onUpdatePortDrag: (g) => _updateLink(_globalToViewport(g)),
                           onEndPortDrag: (g) => _endLink(_globalToViewport(g)),
                         ),
                     ],
                   ),
                 ),
               ),
-
               if (_isLinking)
                 Positioned.fill(
                   child: IgnorePointer(
@@ -1119,7 +1183,6 @@ class _FamilyTreePageState extends State<FamilyTreePage> {
                     ),
                   ),
                 ),
-
               if (isEmpty)
                 Center(
                   child: Padding(
@@ -1137,10 +1200,7 @@ class _FamilyTreePageState extends State<FamilyTreePage> {
                             const SizedBox(height: 10),
                             const Text(
                               'Start your family tree',
-                              style: TextStyle(
-                                fontSize: 16,
-                                fontWeight: FontWeight.w700,
-                              ),
+                              style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700),
                             ),
                             const SizedBox(height: 6),
                             Text(
@@ -1159,7 +1219,6 @@ class _FamilyTreePageState extends State<FamilyTreePage> {
                     ),
                   ),
                 ),
-
               if (!isEmpty)
                 Positioned(
                   right: 16,
@@ -1169,18 +1228,16 @@ class _FamilyTreePageState extends State<FamilyTreePage> {
                     color: Colors.white,
                     borderRadius: BorderRadius.circular(16),
                     child: Padding(
-                      padding: const EdgeInsets.symmetric(
-                          horizontal: 12, vertical: 10),
+                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
                       child: SizedBox(
-                        width: 240,
+                        width: 290,
                         child: Row(
                           children: [
                             IconButton(
                               tooltip: 'Zoom out',
                               icon: const Icon(Icons.remove, size: 18),
                               onPressed: () {
-                                final next = (_zoomValue / 1.15)
-                                    .clamp(_minZoom, _maxZoom);
+                                final next = (_zoomValue / 1.15).clamp(_minZoom, _maxZoom);
                                 _setZoom(next);
                               },
                             ),
@@ -1196,10 +1253,17 @@ class _FamilyTreePageState extends State<FamilyTreePage> {
                               tooltip: 'Zoom in',
                               icon: const Icon(Icons.add, size: 18),
                               onPressed: () {
-                                final next = (_zoomValue * 1.15)
-                                    .clamp(_minZoom, _maxZoom);
+                                final next = (_zoomValue * 1.15).clamp(_minZoom, _maxZoom);
                                 _setZoom(next);
                               },
+                            ),
+                            const SizedBox(width: 6),
+                            Container(width: 1, height: 22, color: const Color(0xFFE2E6EE)),
+                            const SizedBox(width: 6),
+                            IconButton(
+                              tooltip: 'Add standalone member',
+                              icon: const Icon(Icons.person_add_alt_1, size: 18),
+                              onPressed: () => _addStandaloneMemberFlow(context),
                             ),
                           ],
                         ),
@@ -1230,19 +1294,13 @@ class _FamilyTreePageState extends State<FamilyTreePage> {
     }
 
     const double margin = 300;
-    return Rect.fromLTRB(
-      minX - margin,
-      minY - margin,
-      maxX + margin,
-      maxY + margin,
-    );
+    return Rect.fromLTRB(minX - margin, minY - margin, maxX + margin, maxY + margin);
   }
 
   void _fitToScreen(Rect bounds) {
     final screenSize = MediaQuery.of(context).size;
     final scale =
-        min(screenSize.width / bounds.width, screenSize.height / bounds.height) *
-            0.8;
+        min(screenSize.width / bounds.width, screenSize.height / bounds.height) * 0.8;
 
     _syncingFromController = true;
     _tc.value = Matrix4.identity()
@@ -1256,7 +1314,7 @@ class _FamilyTreePageState extends State<FamilyTreePage> {
   }
 
   Future<void> _addFirstMemberFlow(BuildContext context) async {
-    final chosen = await showModalBottomSheet<Kind>(
+    final chosen = await showModalBottomSheet<Gender>(
       context: context,
       showDragHandle: true,
       builder: (ctx) {
@@ -1265,15 +1323,13 @@ class _FamilyTreePageState extends State<FamilyTreePage> {
             mainAxisSize: MainAxisSize.min,
             children: [
               const SizedBox(height: 6),
-              const Text('Select Member Type',
-                  style: TextStyle(fontWeight: FontWeight.w600)),
+              const Text('Select Gender', style: TextStyle(fontWeight: FontWeight.w600)),
               const SizedBox(height: 8),
-              for (final k
-                  in const [Kind.mother, Kind.father, Kind.son, Kind.daughter])
+              for (final g in const [Gender.female, Gender.male])
                 ListTile(
-                  leading: Icon(k.icon),
-                  title: Text(k.label),
-                  onTap: () => Navigator.pop(ctx, k),
+                  leading: Icon(g.icon),
+                  title: Text(g.label),
+                  onTap: () => Navigator.pop(ctx, g),
                 ),
               const SizedBox(height: 12),
             ],
@@ -1291,114 +1347,142 @@ class _FamilyTreePageState extends State<FamilyTreePage> {
     );
     if (name == null) return;
 
-    store.addRoot(name: name, kind: chosen);
+    store.addRoot(name: name, gender: chosen);
   }
 
   Future<void> _openNodeActions(BuildContext context, int nodeId) async {
-    final node = store.getNode(nodeId);
+    final rootContext = context;
 
     await showModalBottomSheet(
-      context: context,
+      context: rootContext,
       showDragHandle: true,
       backgroundColor: Colors.white,
+      isScrollControlled: true,
       builder: (ctx) {
         return SafeArea(
-          child: Padding(
-            padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Row(
-                  children: [
-                    Icon(node.kind.icon),
-                    const SizedBox(width: 10),
-                    Expanded(
-                      child: Text(
-                        node.name,
-                        style: const TextStyle(
-                            fontSize: 18, fontWeight: FontWeight.w600),
-                      ),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 12),
-                ListTile(
-                  leading: const Icon(Icons.edit),
-                  title: const Text('Edit Name'),
-                  onTap: () async {
-                    Navigator.pop(ctx);
-                    final name = await _promptText(context,
-                        title: 'Edit Name', initial: node.name);
-                    if (name != null) store.renameNode(nodeId, name);
-                  },
-                ),
-                ListTile(
-                  leading: const Icon(Icons.favorite),
-                  title: const Text('Add Spouse'),
-                  onTap: () async {
-                    Navigator.pop(ctx);
-                    await _addSpouseFlow(context, personId: nodeId);
-                  },
-                ),
-                ListTile(
-                  leading: const Icon(Icons.arrow_upward),
-                  title: const Text('Add Parent'),
-                  onTap: () async {
-                    Navigator.pop(ctx);
-                    await _addParentFlow(context, personId: nodeId);
-                  },
-                ),
-                ListTile(
-                  leading: const Icon(Icons.arrow_downward),
-                  title: const Text('Add Child'),
-                  onTap: () async {
-                    Navigator.pop(ctx);
-                    await _addChildFlow(context, fromNodeId: nodeId);
-                  },
-                ),
-                ListTile(
-                  leading: const Icon(Icons.delete_outline,
-                      color: Colors.redAccent),
-                  title: const Text('Delete'),
-                  onTap: () async {
-                    Navigator.pop(ctx);
+          child: DraggableScrollableSheet(
+            expand: false,
+            initialChildSize: 0.55,
+            minChildSize: 0.35,
+            maxChildSize: 0.9,
+            builder: (sheetContext, scrollController) {
+              final node = store.getNode(nodeId);
 
-                    final ok = await showDialog<bool>(
-                      context: context,
-                      builder: (dctx) => AlertDialog(
-                        title: const Text('Delete member?'),
-                        content: const Text(
-                          'This will remove the member and all related links (parents, children, spouse).',
-                        ),
-                        actions: [
-                          TextButton(
-                            onPressed: () => Navigator.pop(dctx, false),
-                            child: const Text('Cancel'),
+              return SingleChildScrollView(
+                controller: scrollController,
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Row(
+                        children: [
+                          Icon(node.gender.icon),
+                          const SizedBox(width: 10),
+                          Expanded(
+                            child: Text(
+                              node.name,
+                              style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w600),
+                            ),
                           ),
-                          FilledButton(
-                            style: FilledButton.styleFrom(
-                                backgroundColor: Colors.redAccent),
-                            onPressed: () => Navigator.pop(dctx, true),
-                            child: const Text('Delete'),
-                          ),
+                          Text(node.gender.label, style: TextStyle(color: Colors.grey.shade700))
                         ],
                       ),
-                    );
+                      const SizedBox(height: 12),
+                      ListTile(
+                        leading: const Icon(Icons.edit),
+                        title: const Text('Edit Name'),
+                        onTap: () async {
+                          Navigator.pop(ctx);
+                          final name = await _promptText(
+                            rootContext,
+                            title: 'Edit Name',
+                            initial: node.name,
+                          );
+                          if (name != null) store.renameNode(nodeId, name);
+                        },
+                      ),
+                      ListTile(
+                        leading: const Icon(Icons.cake_outlined),
+                        title: const Text('Edit Birthday'),
+                        subtitle: Text(
+                          node.birthday == null ? 'Not set' : _formatDate(node.birthday!),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                        onTap: () async {
+                          Navigator.pop(ctx);
+                          final picked = await _pickBirthday(rootContext, initial: node.birthday);
+                          if (picked != null) store.setBirthday(nodeId, picked);
+                        },
+                      ),
+                      ListTile(
+                        leading: const Icon(Icons.favorite),
+                        title: const Text('Add Spouse (opposite gender)'),
+                        onTap: () async {
+                          Navigator.pop(ctx);
+                          await _addSpouseFlow(rootContext, personId: nodeId);
+                        },
+                      ),
+                      ListTile(
+                        leading: const Icon(Icons.arrow_upward),
+                        title: const Text('Add Parent'),
+                        onTap: () async {
+                          Navigator.pop(ctx);
+                          await _addParentFlow(rootContext, personId: nodeId);
+                        },
+                      ),
+                      ListTile(
+                        leading: const Icon(Icons.arrow_downward),
+                        title: const Text('Add Child'),
+                        onTap: () async {
+                          Navigator.pop(ctx);
+                          await _addChildFlow(rootContext, fromNodeId: nodeId);
+                        },
+                      ),
+                      ListTile(
+                        leading: const Icon(Icons.delete_outline, color: Colors.redAccent),
+                        title: const Text('Delete'),
+                        onTap: () async {
+                          Navigator.pop(ctx);
 
-                    if (ok != true) return;
-                    store.deleteNode(nodeId);
-                  },
+                          final ok = await showDialog<bool>(
+                            context: rootContext,
+                            builder: (dctx) => AlertDialog(
+                              title: const Text('Delete member?'),
+                              content: const Text(
+                                'This will remove the member and all related links (parents, children, spouse).',
+                              ),
+                              actions: [
+                                TextButton(
+                                  onPressed: () => Navigator.pop(dctx, false),
+                                  child: const Text('Cancel'),
+                                ),
+                                FilledButton(
+                                  style: FilledButton.styleFrom(backgroundColor: Colors.redAccent),
+                                  onPressed: () => Navigator.pop(dctx, true),
+                                  child: const Text('Delete'),
+                                ),
+                              ],
+                            ),
+                          );
+
+                          if (ok != true) return;
+                          store.deleteNode(nodeId);
+                        },
+                      ),
+                    ],
+                  ),
                 ),
-              ],
-            ),
+              );
+            },
           ),
         );
       },
     );
   }
 
-  Future<void> _addSpouseFlow(BuildContext context,
-      {required int personId}) async {
+  Future<void> _addSpouseFlow(BuildContext context, {required int personId}) async {
     final person = store.getNode(personId);
 
     if (person.spouses.isNotEmpty) {
@@ -1415,44 +1499,16 @@ class _FamilyTreePageState extends State<FamilyTreePage> {
       return;
     }
 
-    final options = store.allowedSpouseKindsFor(person.kind);
-
-    final chosen = await showModalBottomSheet<Kind>(
-      context: context,
-      showDragHandle: true,
-      builder: (ctx) {
-        return SafeArea(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              const SizedBox(height: 6),
-              const Text('Select Spouse Type',
-                  style: TextStyle(fontWeight: FontWeight.w600)),
-              const SizedBox(height: 8),
-              for (final k in options)
-                ListTile(
-                  leading: Icon(k.icon),
-                  title: Text(k.label),
-                  onTap: () => Navigator.pop(ctx, k),
-                ),
-              const SizedBox(height: 12),
-            ],
-          ),
-        );
-      },
-    );
-
-    if (chosen == null) return;
+    final spouseGender = person.gender.opposite;
 
     final name = await _promptText(
       context,
-      title: '${chosen.label} Name',
-      initial: 'New ${chosen.label}',
+      title: '${spouseGender.label} Spouse Name',
+      initial: 'New ${spouseGender.label}',
     );
     if (name == null) return;
 
-    final added =
-        store.addSpouse(personId: personId, spouseKind: chosen, name: name);
+    final added = store.addSpouse(personId: personId, name: name);
 
     if (added == null) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -1461,8 +1517,7 @@ class _FamilyTreePageState extends State<FamilyTreePage> {
     }
   }
 
-  Future<void> _addParentFlow(BuildContext context,
-      {required int personId}) async {
+  Future<void> _addParentFlow(BuildContext context, {required int personId}) async {
     final person = store.getNode(personId);
 
     if (person.parents.length >= 2) {
@@ -1472,23 +1527,21 @@ class _FamilyTreePageState extends State<FamilyTreePage> {
       return;
     }
 
-    final (motherId, fatherId) = store.parentPairForPerson(personId);
+    final (femaleP, maleP) = store.parentPairForPerson(personId);
 
-    final options = <Kind>[
-      if (motherId == null) Kind.mother,
-      if (fatherId == null) Kind.father,
+    final options = <Gender>[
+      if (femaleP == null) Gender.female,
+      if (maleP == null) Gender.male,
     ];
 
     if (options.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('${person.name} already has a Mother and a Father.'),
-        ),
+        SnackBar(content: Text('${person.name} already has 2 parents.')),
       );
       return;
     }
 
-    final chosen = await showModalBottomSheet<Kind>(
+    final chosen = await showModalBottomSheet<Gender>(
       context: context,
       showDragHandle: true,
       builder: (ctx) {
@@ -1497,14 +1550,14 @@ class _FamilyTreePageState extends State<FamilyTreePage> {
             mainAxisSize: MainAxisSize.min,
             children: [
               const SizedBox(height: 6),
-              const Text('Select Missing Parent',
+              const Text('Select Missing Parent Gender',
                   style: TextStyle(fontWeight: FontWeight.w600)),
               const SizedBox(height: 8),
-              for (final k in options)
+              for (final g in options)
                 ListTile(
-                  leading: Icon(k.icon),
-                  title: Text(k.label),
-                  onTap: () => Navigator.pop(ctx, k),
+                  leading: Icon(g.icon),
+                  title: Text(g.label),
+                  onTap: () => Navigator.pop(ctx, g),
                 ),
               const SizedBox(height: 12),
             ],
@@ -1517,23 +1570,21 @@ class _FamilyTreePageState extends State<FamilyTreePage> {
 
     final name = await _promptText(
       context,
-      title: '${chosen.label} Name',
+      title: '${chosen.label} Parent Name',
       initial: 'New ${chosen.label}',
     );
     if (name == null) return;
 
-    final added =
-        store.addParent(personId: personId, parentKind: chosen, name: name);
+    final added = store.addParent(personId: personId, parentGender: chosen, name: name);
     if (added == null) {
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Could not add ${chosen.label} (blocked).')),
+        const SnackBar(content: Text('Could not add parent (blocked).')),
       );
     }
   }
 
-  Future<void> _addChildFlow(BuildContext context,
-      {required int fromNodeId}) async {
-    final chosen = await showModalBottomSheet<Kind>(
+  Future<void> _addChildFlow(BuildContext context, {required int fromNodeId}) async {
+    final chosen = await showModalBottomSheet<Gender>(
       context: context,
       showDragHandle: true,
       builder: (ctx) {
@@ -1542,14 +1593,13 @@ class _FamilyTreePageState extends State<FamilyTreePage> {
             mainAxisSize: MainAxisSize.min,
             children: [
               const SizedBox(height: 6),
-              const Text('Select Child',
-                  style: TextStyle(fontWeight: FontWeight.w600)),
+              const Text('Select Child Gender', style: TextStyle(fontWeight: FontWeight.w600)),
               const SizedBox(height: 8),
-              for (final k in const [Kind.son, Kind.daughter])
+              for (final g in const [Gender.female, Gender.male])
                 ListTile(
-                  leading: Icon(k.icon),
-                  title: Text(k.label),
-                  onTap: () => Navigator.pop(ctx, k),
+                  leading: Icon(g.icon),
+                  title: Text(g.label),
+                  onTap: () => Navigator.pop(ctx, g),
                 ),
               const SizedBox(height: 12),
             ],
@@ -1560,11 +1610,14 @@ class _FamilyTreePageState extends State<FamilyTreePage> {
 
     if (chosen == null) return;
 
-    final name = await _promptText(context,
-        title: '${chosen.label} Name', initial: 'New ${chosen.label}');
+    final name = await _promptText(
+      context,
+      title: '${chosen.label} Child Name',
+      initial: 'New ${chosen.label}',
+    );
     if (name == null) return;
 
-    store.addChild(fromNodeId: fromNodeId, name: name, childKind: chosen);
+    store.addChild(fromNodeId: fromNodeId, name: name, childGender: chosen);
   }
 
   Future<String?> _promptText(
@@ -1616,7 +1669,7 @@ class _AnimatedNode extends StatefulWidget {
     required this.onEndPortDrag,
     required this.isHovered,
     required this.onHoverChanged,
-    required this.dragEnabled, // ✅ NEW
+    required this.dragEnabled,
   });
 
   final FamilyNode node;
@@ -1631,14 +1684,15 @@ class _AnimatedNode extends StatefulWidget {
 
   final bool isHovered;
   final ValueChanged<bool> onHoverChanged;
-
-  final bool dragEnabled; // ✅ NEW
+  final bool dragEnabled;
 
   @override
   State<_AnimatedNode> createState() => _AnimatedNodeState();
 }
 
 class _AnimatedNodeState extends State<_AnimatedNode> {
+  Offset? _hoverLocal;
+
   @override
   Widget build(BuildContext context) {
     return AnimatedPositioned(
@@ -1650,15 +1704,19 @@ class _AnimatedNodeState extends State<_AnimatedNode> {
       height: widget.size.height,
       child: MouseRegion(
         onEnter: (_) => widget.onHoverChanged(true),
-        onExit: (_) => widget.onHoverChanged(false),
+        onExit: (_) {
+          setState(() => _hoverLocal = null);
+          widget.onHoverChanged(false);
+        },
+        onHover: (e) => setState(() => _hoverLocal = e.localPosition),
         child: GestureDetector(
           onTap: widget.onTap,
-          // ✅ FIX: don't drag the tile while you are linking
-          onPanUpdate:
-              widget.dragEnabled ? (d) => widget.onDragDelta(d.delta) : null,
+          onPanUpdate: widget.dragEnabled ? (d) => widget.onDragDelta(d.delta) : null,
           child: _MemberCard(
             node: widget.node,
             showPorts: widget.isHovered,
+            hoverLocal: _hoverLocal,
+            size: widget.size,
             onStartPortDrag: widget.onStartPortDrag,
             onUpdatePortDrag: widget.onUpdatePortDrag,
             onEndPortDrag: widget.onEndPortDrag,
@@ -1673,6 +1731,8 @@ class _MemberCard extends StatelessWidget {
   const _MemberCard({
     required this.node,
     required this.showPorts,
+    required this.hoverLocal,
+    required this.size,
     required this.onStartPortDrag,
     required this.onUpdatePortDrag,
     required this.onEndPortDrag,
@@ -1680,21 +1740,63 @@ class _MemberCard extends StatelessWidget {
 
   final FamilyNode node;
   final bool showPorts;
+  final Offset? hoverLocal;
+  final Size size;
 
   final void Function(_LinkPort port, Offset globalStart) onStartPortDrag;
   final void Function(Offset globalPos) onUpdatePortDrag;
   final void Function(Offset globalPos) onEndPortDrag;
 
-  bool get _showParentPort => showPorts && node.parents.length < 2;
-  bool get _showChildPort => showPorts;
-  bool get _showSpousePorts => showPorts && node.spouses.isEmpty;
+  bool get _canShowParent => showPorts && node.parents.length < 2;
+  bool get _canShowChild => showPorts;
+  bool get _canShowSpouse => showPorts && node.spouses.isEmpty;
+
+  static const double _edgeThreshold = 26.0;
+
+  _LinkPort? _nearestAllowedPort() {
+    if (!showPorts) return null;
+    final p = hoverLocal;
+    if (p == null) return null;
+
+    final w = size.width;
+    final h = size.height;
+
+    final dTop = p.dy;
+    final dBottom = (h - p.dy).abs();
+    final dLeft = p.dx;
+    final dRight = (w - p.dx).abs();
+
+    final minDist = [dTop, dBottom, dLeft, dRight].reduce(min);
+    if (minDist > _edgeThreshold) return null;
+
+    final candidates = <(_LinkPort port, double dist)>[
+      (_LinkPort.parentTop, dTop),
+      (_LinkPort.childBottom, dBottom),
+      (_LinkPort.spouseLeft, dLeft),
+      (_LinkPort.spouseRight, dRight),
+    ]..sort((a, b) => a.$2.compareTo(b.$2));
+
+    for (final c in candidates) {
+      switch (c.$1) {
+        case _LinkPort.parentTop:
+          if (_canShowParent) return c.$1;
+          break;
+        case _LinkPort.childBottom:
+          if (_canShowChild) return c.$1;
+          break;
+        case _LinkPort.spouseLeft:
+        case _LinkPort.spouseRight:
+          if (_canShowSpouse) return c.$1;
+          break;
+      }
+    }
+
+    return null;
+  }
 
   @override
   Widget build(BuildContext context) {
-    final tone = switch (node.gender) {
-      Gender.female => const Color(0xFFEAF3FF),
-      Gender.male => const Color(0xFFEFF8F1),
-    };
+    final activePort = _nearestAllowedPort();
 
     return Material(
       elevation: 2,
@@ -1714,10 +1816,10 @@ class _MemberCard extends StatelessWidget {
                     width: 42,
                     height: 42,
                     decoration: BoxDecoration(
-                      color: tone,
+                      color: node.gender.tone,
                       borderRadius: BorderRadius.circular(12),
                     ),
-                    child: Icon(node.kind.icon, color: Colors.black87),
+                    child: Icon(node.gender.icon, color: Colors.black87),
                   ),
                   const SizedBox(width: 10),
                   Expanded(
@@ -1733,12 +1835,20 @@ class _MemberCard extends StatelessWidget {
                         ),
                         const SizedBox(height: 4),
                         Text(
-                          node.kind.label,
-                          style: TextStyle(
-                            color: Colors.grey.shade700,
-                            fontSize: 12,
-                          ),
+                          node.gender.label,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(color: Colors.grey.shade700, fontSize: 12),
                         ),
+                        if (node.birthday != null) ...[
+                          const SizedBox(height: 2),
+                          Text(
+                            _formatDate(node.birthday!),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(color: Colors.grey.shade600, fontSize: 12),
+                          ),
+                        ],
                       ],
                     ),
                   ),
@@ -1746,11 +1856,10 @@ class _MemberCard extends StatelessWidget {
               ),
             ),
           ),
-
-          if (_showParentPort)
+          if (activePort == _LinkPort.parentTop)
             Positioned(
               top: -10,
-              left: (170 / 2) - 10,
+              left: (size.width / 2) - 10,
               child: _PlusPort(
                 tooltip: 'Connect Parent',
                 onStart: (g) => onStartPortDrag(_LinkPort.parentTop, g),
@@ -1758,11 +1867,10 @@ class _MemberCard extends StatelessWidget {
                 onEnd: onEndPortDrag,
               ),
             ),
-
-          if (_showChildPort)
+          if (activePort == _LinkPort.childBottom)
             Positioned(
               bottom: -10,
-              left: (170 / 2) - 10,
+              left: (size.width / 2) - 10,
               child: _PlusPort(
                 tooltip: 'Connect Child',
                 onStart: (g) => onStartPortDrag(_LinkPort.childBottom, g),
@@ -1770,11 +1878,10 @@ class _MemberCard extends StatelessWidget {
                 onEnd: onEndPortDrag,
               ),
             ),
-
-          if (_showSpousePorts) ...[
+          if (activePort == _LinkPort.spouseLeft)
             Positioned(
               left: -10,
-              top: (72 / 2) - 10,
+              top: (size.height / 2) - 10,
               child: _PlusPort(
                 tooltip: 'Connect Spouse',
                 onStart: (g) => onStartPortDrag(_LinkPort.spouseLeft, g),
@@ -1782,9 +1889,10 @@ class _MemberCard extends StatelessWidget {
                 onEnd: onEndPortDrag,
               ),
             ),
+          if (activePort == _LinkPort.spouseRight)
             Positioned(
               right: -10,
-              top: (72 / 2) - 10,
+              top: (size.height / 2) - 10,
               child: _PlusPort(
                 tooltip: 'Connect Spouse',
                 onStart: (g) => onStartPortDrag(_LinkPort.spouseRight, g),
@@ -1792,15 +1900,12 @@ class _MemberCard extends StatelessWidget {
                 onEnd: onEndPortDrag,
               ),
             ),
-          ],
         ],
       ),
     );
   }
 }
 
-/// ✅ FIXED: Clicking the + no longer flashes the connector.
-/// Only starts linking once the pointer MOVES a few pixels.
 class _PlusPort extends StatefulWidget {
   const _PlusPort({
     required this.tooltip,
@@ -1853,20 +1958,14 @@ class _PlusPortState extends State<_PlusPort> {
             widget.onStart(_downGlobal!);
           }
 
-          if (_started) {
-            widget.onUpdate(e.position);
-          }
+          if (_started) widget.onUpdate(e.position);
         },
         onPointerUp: (_) {
-          if (_started) {
-            widget.onEnd(_lastGlobal ?? Offset.zero);
-          }
+          if (_started) widget.onEnd(_lastGlobal ?? Offset.zero);
           _reset();
         },
         onPointerCancel: (_) {
-          if (_started) {
-            widget.onEnd(_lastGlobal ?? Offset.zero);
-          }
+          if (_started) widget.onEnd(_lastGlobal ?? Offset.zero);
           _reset();
         },
         child: Container(
@@ -1965,10 +2064,10 @@ class _ConnectorPainter extends CustomPainter {
       if (child.parents.isEmpty) continue;
       if (!positions.containsKey(child.id)) continue;
 
-      final (motherId, fatherId) = store.parentPairForPerson(child.id);
+      final (femaleP, maleP) = store.parentPairForPerson(child.id);
       final parentIds = <int>[
-        if (motherId != null) motherId,
-        if (fatherId != null) fatherId,
+        if (femaleP != null) femaleP,
+        if (maleP != null) maleP,
       ]..sort();
 
       if (parentIds.isEmpty) continue;
@@ -2015,11 +2114,7 @@ class _ConnectorPainter extends CustomPainter {
 
         canvas.drawLine(p1, Offset(p1.dx, coupleY), spousePaint);
         canvas.drawLine(p2, Offset(p2.dx, coupleY), spousePaint);
-        canvas.drawLine(
-          Offset(leftX, coupleY),
-          Offset(rightX, coupleY),
-          spousePaint,
-        );
+        canvas.drawLine(Offset(leftX, coupleY), Offset(rightX, coupleY), spousePaint);
 
         final heart = TextPainter(
           text: const TextSpan(
@@ -2028,10 +2123,7 @@ class _ConnectorPainter extends CustomPainter {
           ),
           textDirection: TextDirection.ltr,
         )..layout();
-        heart.paint(
-          canvas,
-          Offset(midX - heart.width / 2, coupleY - heart.height / 2),
-        );
+        heart.paint(canvas, Offset(midX - heart.width / 2, coupleY - heart.height / 2));
       }
     }
 
@@ -2064,37 +2156,6 @@ class _ConnectorPainter extends CustomPainter {
 
       minX = min(minX, anchorX);
       maxX = max(maxX, anchorX);
-
-      if (childTops.length == 1) {
-        final childTop = childTops.first;
-
-        if (!isCouple) {
-          final pb = parentBottoms.first;
-          final midY = (pb.dy + childTop.dy) / 2;
-          canvas.drawLine(pb, Offset(pb.dx, midY), paint);
-          canvas.drawLine(Offset(pb.dx, midY), Offset(childTop.dx, midY), paint);
-          canvas.drawLine(Offset(childTop.dx, midY), childTop, paint);
-        } else {
-          final p1 = parentBottoms[0];
-          final p2 = parentBottoms[1];
-          final coupleY = p1.dy + (busY - p1.dy) * 0.35;
-          final midX = (p1.dx + p2.dx) / 2;
-
-          canvas.drawLine(p1, Offset(p1.dx, coupleY), paint);
-          canvas.drawLine(p2, Offset(p2.dx, coupleY), paint);
-          canvas.drawLine(
-            Offset(min(p1.dx, p2.dx), coupleY),
-            Offset(max(p1.dx, p2.dx), coupleY),
-            paint,
-          );
-
-          final midY = (coupleY + childTop.dy) / 2;
-          canvas.drawLine(Offset(midX, coupleY), Offset(midX, midY), paint);
-          canvas.drawLine(Offset(midX, midY), Offset(childTop.dx, midY), paint);
-          canvas.drawLine(Offset(childTop.dx, midY), childTop, paint);
-        }
-        continue;
-      }
 
       if (!isCouple) {
         final pb = parentBottoms.first;
