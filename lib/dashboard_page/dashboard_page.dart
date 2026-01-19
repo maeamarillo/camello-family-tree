@@ -1,7 +1,12 @@
+import 'dart:io';
 import 'dart:math';
+import 'dart:typed_data';
 import 'package:flutter/material.dart';
-import 'package:flutter/rendering.dart'; // ✅ MatrixUtils
-import 'package:flutter/services.dart'; // ✅ Ctrl key detection (HardwareKeyboard)
+import 'package:flutter/rendering.dart';
+import 'package:flutter/services.dart';
+import 'package:image_picker/image_picker.dart';
+import 'package:photo_view/photo_view.dart';
+import 'package:flutter/foundation.dart' show kIsWeb;
 
 void main() => runApp(const DashboardPage());
 
@@ -64,6 +69,8 @@ class FamilyNode {
     required this.levelY,
     required this.slotX,
     this.birthday,
+    this.photoPath,
+    this.photoBytes,
   });
 
   final int id;
@@ -79,6 +86,22 @@ class FamilyNode {
 
   Offset manualOffset = Offset.zero;
   DateTime? birthday;
+  String? photoPath; // For mobile/desktop
+  Uint8List? photoBytes; // For web
+
+  bool get hasPhoto => kIsWeb ? photoBytes != null : photoPath != null;
+  
+  ImageProvider get photoProvider {
+    if (kIsWeb) {
+      return photoBytes != null 
+          ? MemoryImage(photoBytes!)
+          : const AssetImage('assets/placeholder.png') as ImageProvider;
+    } else {
+      return photoPath != null && File(photoPath!).existsSync()
+          ? FileImage(File(photoPath!))
+          : const AssetImage('assets/placeholder.png') as ImageProvider;
+    }
+  }
 }
 
 class FamilyTreeStore extends ChangeNotifier {
@@ -94,6 +117,8 @@ class FamilyTreeStore extends ChangeNotifier {
     required int levelY,
     required double slotX,
     DateTime? birthday,
+    String? photoPath,
+    Uint8List? photoBytes,
   }) {
     final node = FamilyNode(
       id: _nextId++,
@@ -102,6 +127,8 @@ class FamilyTreeStore extends ChangeNotifier {
       levelY: levelY,
       slotX: slotX,
       birthday: birthday,
+      photoPath: photoPath,
+      photoBytes: photoBytes,
     );
     _nodes[node.id] = node;
     lastAddedId = node.id;
@@ -113,6 +140,22 @@ class FamilyTreeStore extends ChangeNotifier {
   void setBirthday(int id, DateTime? date) {
     if (!_nodes.containsKey(id)) return;
     getNode(id).birthday = date;
+    notifyListeners();
+  }
+
+  void setPhoto(int id, String? photoPath, [Uint8List? photoBytes]) {
+    if (!_nodes.containsKey(id)) return;
+    final node = getNode(id);
+    node.photoPath = photoPath;
+    node.photoBytes = photoBytes;
+    notifyListeners();
+  }
+
+  void removePhoto(int id) {
+    if (!_nodes.containsKey(id)) return;
+    final node = getNode(id);
+    node.photoPath = null;
+    node.photoBytes = null;
     notifyListeners();
   }
 
@@ -392,6 +435,8 @@ class FamilyTreeStore extends ChangeNotifier {
     required String name,
     required Gender gender,
     DateTime? birthday,
+    String? photoPath,
+    Uint8List? photoBytes,
   }) {
     final root = createNode(
       name: name,
@@ -399,6 +444,8 @@ class FamilyTreeStore extends ChangeNotifier {
       levelY: 0,
       slotX: 0,
       birthday: birthday,
+      photoPath: photoPath,
+      photoBytes: photoBytes,
     );
     _stabilizeLayout();
     notifyListeners();
@@ -409,6 +456,8 @@ class FamilyTreeStore extends ChangeNotifier {
     required String name,
     required Gender gender,
     DateTime? birthday,
+    String? photoPath,
+    Uint8List? photoBytes,
   }) {
     const level = 0;
 
@@ -434,6 +483,8 @@ class FamilyTreeStore extends ChangeNotifier {
       levelY: level,
       slotX: slot,
       birthday: birthday,
+      photoPath: photoPath,
+      photoBytes: photoBytes,
     );
 
     _stabilizeLayout();
@@ -471,6 +522,8 @@ class FamilyTreeStore extends ChangeNotifier {
     required int personId,
     required String name,
     DateTime? birthday,
+    String? photoPath,
+    Uint8List? photoBytes,
   }) {
     final person = getNode(personId);
     if (person.spouses.isNotEmpty) return null;
@@ -491,6 +544,8 @@ class FamilyTreeStore extends ChangeNotifier {
       levelY: person.levelY,
       slotX: slot,
       birthday: birthday,
+      photoPath: photoPath,
+      photoBytes: photoBytes,
     );
 
     linkSpouses(aId: personId, bId: spouse.id, notify: false);
@@ -506,6 +561,8 @@ class FamilyTreeStore extends ChangeNotifier {
     required Gender parentGender,
     required String name,
     DateTime? birthday,
+    String? photoPath,
+    Uint8List? photoBytes,
   }) {
     final person = getNode(personId);
     if (person.parents.length >= 2) return null;
@@ -526,6 +583,8 @@ class FamilyTreeStore extends ChangeNotifier {
         existingOtherParentId: otherParentId,
       ),
       birthday: birthday,
+      photoPath: photoPath,
+      photoBytes: photoBytes,
     );
 
     linkParentChild(parentId: parent.id, childId: personId, notify: false);
@@ -548,6 +607,8 @@ class FamilyTreeStore extends ChangeNotifier {
     required String name,
     required Gender childGender,
     DateTime? birthday,
+    String? photoPath,
+    Uint8List? photoBytes,
   }) {
     final from = getNode(fromNodeId);
     final slot = _nextChildSlotSmart(fromNodeId);
@@ -558,6 +619,8 @@ class FamilyTreeStore extends ChangeNotifier {
       levelY: from.levelY + 1,
       slotX: slot,
       birthday: birthday,
+      photoPath: photoPath,
+      photoBytes: photoBytes,
     );
 
     linkParentChild(parentId: from.id, childId: child.id, notify: false);
@@ -594,10 +657,6 @@ class FamilyTreeStore extends ChangeNotifier {
     lastAddedId = null;
     notifyListeners();
   }
-
-  // ------------------------------------------------------------
-  // ✅ DRAG-LINK RULES (FINAL): both directions behave like addChild()
-  // ------------------------------------------------------------
 
   bool tryLinkExistingParent({required int parentId, required int childId}) {
     if (!_nodes.containsKey(parentId) || !_nodes.containsKey(childId)) return false;
@@ -783,8 +842,9 @@ class _FamilyTreePageState extends State<FamilyTreePage> {
   int? _hoveredNodeId;
   Map<int, Offset> _lastLayoutScene = {};
 
-  // ✅ Ctrl-selected tiles (blue outline persists after Ctrl release)
   final Set<int> _ctrlSelectedIds = <int>{};
+
+  final ImagePicker _imagePicker = ImagePicker();
 
   bool get _ctrlPressed {
     final kb = HardwareKeyboard.instance;
@@ -805,6 +865,234 @@ class _FamilyTreePageState extends State<FamilyTreePage> {
   void _clearCtrlSelection() {
     if (_ctrlSelectedIds.isEmpty) return;
     setState(() => _ctrlSelectedIds.clear());
+  }
+
+  Future<Uint8List?> _getImageBytes(XFile file) async {
+    try {
+      return await file.readAsBytes();
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Failed to read image: $e')),
+        );
+      }
+      return null;
+    }
+  }
+
+  Future<Uint8List?> _pickImageFromGallery() async {
+    try {
+      final XFile? image = await _imagePicker.pickImage(
+        source: ImageSource.gallery,
+        maxWidth: 800,
+        maxHeight: 800,
+        imageQuality: 85,
+      );
+      if (image == null) return null;
+      return await _getImageBytes(image);
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Failed to pick image: $e')),
+        );
+      }
+      return null;
+    }
+  }
+
+  Future<Uint8List?> _takePhotoWithCamera() async {
+    try {
+      final XFile? image = await _imagePicker.pickImage(
+        source: ImageSource.camera,
+        maxWidth: 800,
+        maxHeight: 800,
+        imageQuality: 85,
+      );
+      if (image == null) return null;
+      return await _getImageBytes(image);
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Failed to take photo: $e')),
+        );
+      }
+      return null;
+    }
+  }
+
+  Future<String?> _showPhotoSourceDialog(BuildContext context) async {
+    return await showDialog<String>(
+      context: context,
+      builder: (BuildContext context) {
+        return AlertDialog(
+          title: const Text('Add Photo'),
+          content: const Text('Choose photo source'),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context, 'gallery'),
+              child: const Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(Icons.photo_library),
+                  SizedBox(width: 8),
+                  Text('Gallery'),
+                ],
+              ),
+            ),
+            TextButton(
+              onPressed: () => Navigator.pop(context, 'camera'),
+              child: const Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(Icons.camera_alt),
+                  SizedBox(width: 8),
+                  Text('Camera'),
+                ],
+              ),
+            ),
+            TextButton(
+              onPressed: () => Navigator.pop(context, 'remove'),
+              child: const Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(Icons.delete),
+                  SizedBox(width: 8),
+                  Text('Remove Photo'),
+                ],
+              ),
+            ),
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('Cancel'),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  Future<void> _handlePhotoAction(int nodeId) async {
+    final source = await _showPhotoSourceDialog(context);
+    if (source == null) return;
+
+    if (source == 'remove') {
+      store.removePhoto(nodeId);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Photo removed')),
+        );
+      }
+      return;
+    }
+
+    Uint8List? photoBytes;
+    if (source == 'gallery') {
+      photoBytes = await _pickImageFromGallery();
+    } else if (source == 'camera') {
+      photoBytes = await _takePhotoWithCamera();
+    }
+
+    if (photoBytes != null) {
+      // For web, we only store bytes. For mobile/desktop, we store both path and bytes
+      if (kIsWeb) {
+        store.setPhoto(nodeId, null, photoBytes);
+      } else {
+        // On mobile/desktop, we can't store the path from picker directly
+        // We'll just store the bytes for now
+        store.setPhoto(nodeId, null, photoBytes);
+      }
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Photo updated')),
+        );
+      }
+    }
+  }
+
+  void _viewPhotoFullScreen(FamilyNode node) {
+    if (!node.hasPhoto) return;
+    
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (context) => Scaffold(
+          appBar: AppBar(
+            title: const Text('Photo'),
+            actions: [
+              IconButton(
+                icon: const Icon(Icons.close),
+                onPressed: () => Navigator.pop(context),
+              ),
+            ],
+          ),
+          body: PhotoView(
+            imageProvider: node.photoProvider,
+            backgroundDecoration: const BoxDecoration(color: Colors.black),
+            minScale: PhotoViewComputedScale.contained,
+            maxScale: PhotoViewComputedScale.covered * 2,
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildPhotoPreview(FamilyNode node) {
+    return GestureDetector(
+      onTap: node.hasPhoto ? () => _viewPhotoFullScreen(node) : null,
+      child: Container(
+        width: 50,
+        height: 50,
+        decoration: BoxDecoration(
+          shape: BoxShape.circle,
+          color: !node.hasPhoto ? node.gender.tone : null,
+          border: Border.all(color: Colors.grey.shade300, width: 1),
+        ),
+        child: !node.hasPhoto
+            ? Icon(node.gender.icon, size: 24, color: Colors.grey.shade700)
+            : ClipOval(
+                child: Image(
+                  image: node.photoProvider,
+                  fit: BoxFit.cover,
+                  errorBuilder: (context, error, stackTrace) {
+                    return Container(
+                      color: node.gender.tone,
+                      child: Icon(
+                        node.gender.icon,
+                        size: 24,
+                        color: Colors.grey.shade700,
+                      ),
+                    );
+                  },
+                ),
+              ),
+      ),
+    );
+  }
+
+  Widget _buildMemberPhoto(FamilyNode node) {
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(12),
+      child: Container(
+        width: 42,
+        height: 42,
+        color: !node.hasPhoto ? node.gender.tone : null,
+        child: !node.hasPhoto
+            ? Icon(node.gender.icon, color: Colors.black87)
+            : Image(
+                image: node.photoProvider,
+                fit: BoxFit.cover,
+                errorBuilder: (context, error, stackTrace) {
+                  return Container(
+                    color: node.gender.tone,
+                    child: Icon(
+                      node.gender.icon,
+                      color: Colors.black87,
+                    ),
+                  );
+                },
+              ),
+      ),
+    );
   }
 
   @override
@@ -1047,15 +1335,44 @@ class _FamilyTreePageState extends State<FamilyTreePage> {
     );
   }
 
-  Future<void> _addStandaloneMemberFlow(BuildContext context) async {
-    final name = await _promptText(
-      context,
-      title: 'Member Name',
-      initial: 'New Member',
-    );
-    if (name == null) return;
+  Future<String?> _promptText(
+    BuildContext context, {
+    required String title,
+    required String initial,
+  }) async {
+    final c = TextEditingController(text: initial);
 
-    final chosen = await showModalBottomSheet<Gender>(
+    return showDialog<String>(
+      context: context,
+      builder: (ctx) {
+        return AlertDialog(
+          title: Text(title),
+          content: TextField(
+            controller: c,
+            autofocus: true,
+            decoration: const InputDecoration(
+              hintText: 'Enter name',
+              border: OutlineInputBorder(),
+            ),
+            onSubmitted: (_) => Navigator.pop(ctx, c.text),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: const Text('Cancel'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.pop(ctx, c.text),
+              child: const Text('Save'),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  Future<Gender?> _selectGender(BuildContext context) async {
+    return await showModalBottomSheet<Gender>(
       context: context,
       showDragHandle: true,
       builder: (ctx) {
@@ -1078,15 +1395,399 @@ class _FamilyTreePageState extends State<FamilyTreePage> {
         );
       },
     );
+  }
 
+  Future<Uint8List?> _addPhotoFlow(BuildContext context) async {
+    final source = await showDialog<String>(
+      context: context,
+      builder: (BuildContext context) {
+        return AlertDialog(
+          title: const Text('Add Photo (Optional)'),
+          content: const Text('Would you like to add a photo for this member?'),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context, 'gallery'),
+              child: const Text('Gallery'),
+            ),
+            TextButton(
+              onPressed: () => Navigator.pop(context, 'camera'),
+              child: const Text('Camera'),
+            ),
+            TextButton(
+              onPressed: () => Navigator.pop(context, 'skip'),
+              child: const Text('Skip'),
+            ),
+          ],
+        );
+      },
+    );
+
+    if (source == 'skip') return null;
+
+    if (source == 'gallery') {
+      return await _pickImageFromGallery();
+    } else if (source == 'camera') {
+      return await _takePhotoWithCamera();
+    }
+
+    return null;
+  }
+
+  Future<void> _addFirstMemberFlow(BuildContext context) async {
+    final name = await _promptText(
+      context,
+      title: 'First Member Name',
+      initial: 'New Member',
+    );
+    if (name == null) return;
+
+    final chosen = await _selectGender(context);
     if (chosen == null) return;
 
-    final pickedBirthday = await _pickBirthday(context, initial: null);
+    final birthday = await _pickBirthday(context, initial: null);
+    
+    final photoBytes = await _addPhotoFlow(context);
+
+    store.addRoot(
+      name: name,
+      gender: chosen,
+      birthday: birthday,
+      photoBytes: photoBytes,
+    );
+  }
+
+  Future<void> _addStandaloneMemberFlow(BuildContext context) async {
+    final name = await _promptText(
+      context,
+      title: 'Member Name',
+      initial: 'New Member',
+    );
+    if (name == null) return;
+
+    final chosen = await _selectGender(context);
+    if (chosen == null) return;
+
+    final birthday = await _pickBirthday(context, initial: null);
+    
+    final photoBytes = await _addPhotoFlow(context);
 
     store.addStandalone(
       name: name,
       gender: chosen,
-      birthday: pickedBirthday,
+      birthday: birthday,
+      photoBytes: photoBytes,
+    );
+  }
+
+  Future<void> _openNodeActions(BuildContext context, int nodeId) async {
+    if (_ctrlSelectedIds.isNotEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Selection active. Ctrl+Click tiles to unselect first.')),
+      );
+      return;
+    }
+
+    final rootContext = context;
+
+    await showModalBottomSheet(
+      context: rootContext,
+      showDragHandle: true,
+      backgroundColor: Colors.white,
+      isScrollControlled: true,
+      builder: (ctx) {
+        final node = store.getNode(nodeId);
+
+        return SafeArea(
+          child: DraggableScrollableSheet(
+            expand: false,
+            initialChildSize: 0.6,
+            minChildSize: 0.35,
+            maxChildSize: 0.9,
+            builder: (sheetContext, scrollController) {
+              return SingleChildScrollView(
+                controller: scrollController,
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Row(
+                        children: [
+                          _buildPhotoPreview(node),
+                          const SizedBox(width: 10),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  node.name,
+                                  style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w600),
+                                ),
+                                const SizedBox(height: 4),
+                                Text(
+                                  node.gender.label,
+                                  style: TextStyle(color: Colors.grey.shade700),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 12),
+                      
+                      ListTile(
+                        leading: const Icon(Icons.photo),
+                        title: const Text('Edit Photo'),
+                        subtitle: Text(node.hasPhoto ? 'Photo attached' : 'No photo'),
+                        onTap: () async {
+                          Navigator.pop(ctx);
+                          await _handlePhotoAction(nodeId);
+                        },
+                      ),
+                      
+                      if (node.hasPhoto)
+                        ListTile(
+                          leading: const Icon(Icons.visibility),
+                          title: const Text('View Photo'),
+                          onTap: () {
+                            Navigator.pop(ctx);
+                            _viewPhotoFullScreen(node);
+                          },
+                        ),
+                      
+                      const Divider(),
+                      
+                      ListTile(
+                        leading: const Icon(Icons.edit),
+                        title: const Text('Edit Name'),
+                        onTap: () async {
+                          Navigator.pop(ctx);
+                          final name = await _promptText(
+                            rootContext,
+                            title: 'Edit Name',
+                            initial: node.name,
+                          );
+                          if (name != null) store.renameNode(nodeId, name);
+                        },
+                      ),
+                      ListTile(
+                        leading: const Icon(Icons.cake_outlined),
+                        title: const Text('Edit Birthday'),
+                        subtitle: Text(
+                          node.birthday == null ? 'Not set' : _formatDate(node.birthday!),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                        onTap: () async {
+                          Navigator.pop(ctx);
+                          final picked = await _pickBirthday(rootContext, initial: node.birthday);
+                          if (picked != null) store.setBirthday(nodeId, picked);
+                        },
+                      ),
+                      const Divider(),
+                      ListTile(
+                        leading: const Icon(Icons.favorite),
+                        title: const Text('Add Spouse (opposite gender)'),
+                        onTap: () async {
+                          Navigator.pop(ctx);
+                          await _addSpouseFlow(rootContext, personId: nodeId);
+                        },
+                      ),
+                      ListTile(
+                        leading: const Icon(Icons.arrow_upward),
+                        title: const Text('Add Parent'),
+                        onTap: () async {
+                          Navigator.pop(ctx);
+                          await _addParentFlow(rootContext, personId: nodeId);
+                        },
+                      ),
+                      ListTile(
+                        leading: const Icon(Icons.arrow_downward),
+                        title: const Text('Add Child'),
+                        onTap: () async {
+                          Navigator.pop(ctx);
+                          await _addChildFlow(rootContext, fromNodeId: nodeId);
+                        },
+                      ),
+                      const Divider(),
+                      ListTile(
+                        leading: const Icon(Icons.delete_outline, color: Colors.redAccent),
+                        title: const Text('Delete'),
+                        onTap: () async {
+                          Navigator.pop(ctx);
+                          final ok = await showDialog<bool>(
+                            context: rootContext,
+                            builder: (dctx) => AlertDialog(
+                              title: const Text('Delete member?'),
+                              content: const Text(
+                                'This will remove the member and all related links.',
+                              ),
+                              actions: [
+                                TextButton(
+                                  onPressed: () => Navigator.pop(dctx, false),
+                                  child: const Text('Cancel'),
+                                ),
+                                FilledButton(
+                                  style: FilledButton.styleFrom(backgroundColor: Colors.redAccent),
+                                  onPressed: () => Navigator.pop(dctx, true),
+                                  child: const Text('Delete'),
+                                ),
+                              ],
+                            ),
+                          );
+                          if (ok != true) return;
+                          store.deleteNode(nodeId);
+                        },
+                      ),
+                    ],
+                  ),
+                ),
+              );
+            },
+          ),
+        );
+      },
+    );
+  }
+
+  Future<void> _addSpouseFlow(BuildContext context, {required int personId}) async {
+    final person = store.getNode(personId);
+
+    if (person.spouses.isNotEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('${person.name} already has a spouse.')),
+      );
+      return;
+    }
+
+    if (store.hasCoParentViaChildren(personId)) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('${person.name} already has a co-parent.')),
+      );
+      return;
+    }
+
+    final name = await _promptText(
+      context,
+      title: 'Spouse Name',
+      initial: 'New Spouse',
+    );
+    if (name == null) return;
+
+    final birthday = await _pickBirthday(context, initial: null);
+    
+    final photoBytes = await _addPhotoFlow(context);
+
+    final added = store.addSpouse(
+      personId: personId,
+      name: name,
+      birthday: birthday,
+      photoBytes: photoBytes,
+    );
+
+    if (added == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Could not add spouse.')),
+      );
+    }
+  }
+
+  Future<void> _addParentFlow(BuildContext context, {required int personId}) async {
+    final person = store.getNode(personId);
+
+    if (person.parents.length >= 2) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('${person.name} already has 2 parents.')),
+      );
+      return;
+    }
+
+    final (femaleP, maleP) = store.parentPairForPerson(personId);
+
+    final name = await _promptText(
+      context,
+      title: 'Parent Name',
+      initial: 'New Parent',
+    );
+    if (name == null) return;
+
+    final options = <Gender>[
+      if (femaleP == null) Gender.female,
+      if (maleP == null) Gender.male,
+    ];
+
+    if (options.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('${person.name} already has 2 parents.')),
+      );
+      return;
+    }
+
+    final chosen = await showModalBottomSheet<Gender>(
+      context: context,
+      showDragHandle: true,
+      builder: (ctx) {
+        return SafeArea(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const SizedBox(height: 6),
+              const Text('Select Parent Gender', style: TextStyle(fontWeight: FontWeight.w600)),
+              const SizedBox(height: 8),
+              for (final g in options)
+                ListTile(
+                  leading: Icon(g.icon),
+                  title: Text(g.label),
+                  onTap: () => Navigator.pop(ctx, g),
+                ),
+              const SizedBox(height: 12),
+            ],
+          ),
+        );
+      },
+    );
+
+    if (chosen == null) return;
+
+    final birthday = await _pickBirthday(context, initial: null);
+    
+    final photoBytes = await _addPhotoFlow(context);
+
+    final added = store.addParent(
+      personId: personId,
+      parentGender: chosen,
+      name: name,
+      birthday: birthday,
+      photoBytes: photoBytes,
+    );
+    if (added == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Could not add parent (blocked).')),
+      );
+    }
+  }
+
+  Future<void> _addChildFlow(BuildContext context, {required int fromNodeId}) async {
+    final name = await _promptText(
+      context,
+      title: 'Child Name',
+      initial: 'New Child',
+    );
+    if (name == null) return;
+
+    final chosen = await _selectGender(context);
+    if (chosen == null) return;
+
+    final birthday = await _pickBirthday(context, initial: null);
+    
+    final photoBytes = await _addPhotoFlow(context);
+
+    store.addChild(
+      fromNodeId: fromNodeId,
+      name: name,
+      childGender: chosen,
+      birthday: birthday,
+      photoBytes: photoBytes,
     );
   }
 
@@ -1135,7 +1836,6 @@ class _FamilyTreePageState extends State<FamilyTreePage> {
           ),
           body: Stack(
             children: [
-              // ✅ Tap empty space clears selection (unless you are holding Ctrl for another selection click)
               GestureDetector(
                 behavior: HitTestBehavior.translucent,
                 onTapDown: (_) {
@@ -1170,16 +1870,11 @@ class _FamilyTreePageState extends State<FamilyTreePage> {
                             node: store.getNode(entry.key),
                             topLeft: entry.value,
                             size: cardSize,
-
-                            // ✅ persistent blue outline ONLY for ctrl-selected tiles
                             isSelected: _ctrlSelectedIds.contains(entry.key),
-
                             isHovered: _ctrlSelectedIds.contains(entry.key) ||
                                 entry.key == _hoveredNodeId ||
                                 (_isLinking && _linkFromNodeId == entry.key),
-
                             dragEnabled: !_isLinking,
-
                             onHoverChanged: (hovering) {
                               if (!mounted) return;
                               setState(() {
@@ -1190,9 +1885,6 @@ class _FamilyTreePageState extends State<FamilyTreePage> {
                                 }
                               });
                             },
-
-                            // ✅ Ctrl+Click toggles selection.
-                            // ✅ If ANY selection exists, block opening the edit/actions sheet.
                             onTapSelect: (id) {
                               if (_isLinking) return;
 
@@ -1212,20 +1904,14 @@ class _FamilyTreePageState extends State<FamilyTreePage> {
 
                               _openNodeActions(context, id);
                             },
-
                             onDragStart: () {
                               if (_isLinking) return;
 
-                              // (Optional) if you Ctrl+drag a tile, ensure it's selected
                               if (_ctrlPressed && !_ctrlSelectedIds.contains(entry.key)) {
                                 _toggleCtrlSelect(entry.key);
                               }
                             },
-
                             onDragEnd: () {},
-
-                            // ✅ Move the group ONLY if you're dragging a selected tile.
-                            // Otherwise, move just the tile you dragged.
                             onDragDelta: (delta) {
                               if (_isLinking) return;
 
@@ -1241,7 +1927,6 @@ class _FamilyTreePageState extends State<FamilyTreePage> {
                                 store.addManualOffsetBulk(ids, delta);
                               }
                             },
-
                             onStartPortDrag: (port, globalStart) {
                               final topLeft = layout[entry.key]!;
                               final startScene = switch (port) {
@@ -1411,380 +2096,6 @@ class _FamilyTreePageState extends State<FamilyTreePage> {
     final clamped = scale.clamp(_minZoom, _maxZoom);
     setState(() => _zoomValue = clamped);
   }
-
-  Future<void> _addFirstMemberFlow(BuildContext context) async {
-    final name = await _promptText(
-      context,
-      title: 'First Member Name',
-      initial: 'New Member',
-    );
-    if (name == null) return;
-
-    final chosen = await showModalBottomSheet<Gender>(
-      context: context,
-      showDragHandle: true,
-      builder: (ctx) {
-        return SafeArea(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              const SizedBox(height: 6),
-              const Text('Select Gender', style: TextStyle(fontWeight: FontWeight.w600)),
-              const SizedBox(height: 8),
-              for (final g in const [Gender.female, Gender.male])
-                ListTile(
-                  leading: Icon(g.icon),
-                  title: Text(g.label),
-                  onTap: () => Navigator.pop(ctx, g),
-                ),
-              const SizedBox(height: 12),
-            ],
-          ),
-        );
-      },
-    );
-
-    if (chosen == null) return;
-
-    final birthday = await _pickBirthday(context, initial: null);
-
-    store.addRoot(
-      name: name,
-      gender: chosen,
-      birthday: birthday,
-    );
-  }
-
-  Future<void> _openNodeActions(BuildContext context, int nodeId) async {
-    // ✅ HARD BLOCK edits/actions while selection is active
-    if (_ctrlSelectedIds.isNotEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Selection active. Ctrl+Click tiles to unselect first.')),
-      );
-      return;
-    }
-
-    final rootContext = context;
-
-    await showModalBottomSheet(
-      context: rootContext,
-      showDragHandle: true,
-      backgroundColor: Colors.white,
-      isScrollControlled: true,
-      builder: (ctx) {
-        return SafeArea(
-          child: DraggableScrollableSheet(
-            expand: false,
-            initialChildSize: 0.55,
-            minChildSize: 0.35,
-            maxChildSize: 0.9,
-            builder: (sheetContext, scrollController) {
-              final node = store.getNode(nodeId);
-
-              return SingleChildScrollView(
-                controller: scrollController,
-                child: Padding(
-                  padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Row(
-                        children: [
-                          Icon(node.gender.icon),
-                          const SizedBox(width: 10),
-                          Expanded(
-                            child: Text(
-                              node.name,
-                              style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w600),
-                            ),
-                          ),
-                          Text(node.gender.label, style: TextStyle(color: Colors.grey.shade700))
-                        ],
-                      ),
-                      const SizedBox(height: 12),
-                      ListTile(
-                        leading: const Icon(Icons.edit),
-                        title: const Text('Edit Name'),
-                        onTap: () async {
-                          Navigator.pop(ctx);
-                          final name = await _promptText(
-                            rootContext,
-                            title: 'Edit Name',
-                            initial: node.name,
-                          );
-                          if (name != null) store.renameNode(nodeId, name);
-                        },
-                      ),
-                      ListTile(
-                        leading: const Icon(Icons.cake_outlined),
-                        title: const Text('Edit Birthday'),
-                        subtitle: Text(
-                          node.birthday == null ? 'Not set' : _formatDate(node.birthday!),
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                        onTap: () async {
-                          Navigator.pop(ctx);
-                          final picked = await _pickBirthday(rootContext, initial: node.birthday);
-                          if (picked != null) store.setBirthday(nodeId, picked);
-                        },
-                      ),
-                      ListTile(
-                        leading: const Icon(Icons.favorite),
-                        title: const Text('Add Spouse (opposite gender)'),
-                        onTap: () async {
-                          Navigator.pop(ctx);
-                          await _addSpouseFlow(rootContext, personId: nodeId);
-                        },
-                      ),
-                      ListTile(
-                        leading: const Icon(Icons.arrow_upward),
-                        title: const Text('Add Parent'),
-                        onTap: () async {
-                          Navigator.pop(ctx);
-                          await _addParentFlow(rootContext, personId: nodeId);
-                        },
-                      ),
-                      ListTile(
-                        leading: const Icon(Icons.arrow_downward),
-                        title: const Text('Add Child'),
-                        onTap: () async {
-                          Navigator.pop(ctx);
-                          await _addChildFlow(rootContext, fromNodeId: nodeId);
-                        },
-                      ),
-                      ListTile(
-                        leading: const Icon(Icons.delete_outline, color: Colors.redAccent),
-                        title: const Text('Delete'),
-                        onTap: () async {
-                          Navigator.pop(ctx);
-
-                          final ok = await showDialog<bool>(
-                            context: rootContext,
-                            builder: (dctx) => AlertDialog(
-                              title: const Text('Delete member?'),
-                              content: const Text(
-                                'This will remove the member and all related links (parents, children, spouse).',
-                              ),
-                              actions: [
-                                TextButton(
-                                  onPressed: () => Navigator.pop(dctx, false),
-                                  child: const Text('Cancel'),
-                                ),
-                                FilledButton(
-                                  style: FilledButton.styleFrom(backgroundColor: Colors.redAccent),
-                                  onPressed: () => Navigator.pop(dctx, true),
-                                  child: const Text('Delete'),
-                                ),
-                              ],
-                            ),
-                          );
-
-                          if (ok != true) return;
-                          store.deleteNode(nodeId);
-                        },
-                      ),
-                    ],
-                  ),
-                ),
-              );
-            },
-          ),
-        );
-      },
-    );
-  }
-
-  Future<void> _addSpouseFlow(BuildContext context, {required int personId}) async {
-    final person = store.getNode(personId);
-
-    if (person.spouses.isNotEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('${person.name} already has a spouse.')),
-      );
-      return;
-    }
-
-    if (store.hasCoParentViaChildren(personId)) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('${person.name} already has a co-parent.')),
-      );
-      return;
-    }
-
-    final name = await _promptText(
-      context,
-      title: 'Spouse Name',
-      initial: 'New Spouse',
-    );
-    if (name == null) return;
-
-    final birthday = await _pickBirthday(context, initial: null);
-
-    final added = store.addSpouse(
-      personId: personId,
-      name: name,
-      birthday: birthday,
-    );
-
-    if (added == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Could not add spouse.')),
-      );
-    }
-  }
-
-  Future<void> _addParentFlow(BuildContext context, {required int personId}) async {
-    final person = store.getNode(personId);
-
-    if (person.parents.length >= 2) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('${person.name} already has 2 parents.')),
-      );
-      return;
-    }
-
-    final (femaleP, maleP) = store.parentPairForPerson(personId);
-
-    final name = await _promptText(
-      context,
-      title: 'Parent Name',
-      initial: 'New Parent',
-    );
-    if (name == null) return;
-
-    final options = <Gender>[
-      if (femaleP == null) Gender.female,
-      if (maleP == null) Gender.male,
-    ];
-
-    if (options.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('${person.name} already has 2 parents.')),
-      );
-      return;
-    }
-
-    final chosen = await showModalBottomSheet<Gender>(
-      context: context,
-      showDragHandle: true,
-      builder: (ctx) {
-        return SafeArea(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              const SizedBox(height: 6),
-              const Text('Select Parent Gender', style: TextStyle(fontWeight: FontWeight.w600)),
-              const SizedBox(height: 8),
-              for (final g in options)
-                ListTile(
-                  leading: Icon(g.icon),
-                  title: Text(g.label),
-                  onTap: () => Navigator.pop(ctx, g),
-                ),
-              const SizedBox(height: 12),
-            ],
-          ),
-        );
-      },
-    );
-
-    if (chosen == null) return;
-
-    final birthday = await _pickBirthday(context, initial: null);
-
-    final added = store.addParent(
-      personId: personId,
-      parentGender: chosen,
-      name: name,
-      birthday: birthday,
-    );
-    if (added == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Could not add parent (blocked).')),
-      );
-    }
-  }
-
-  Future<void> _addChildFlow(BuildContext context, {required int fromNodeId}) async {
-    final name = await _promptText(
-      context,
-      title: 'Child Name',
-      initial: 'New Child',
-    );
-    if (name == null) return;
-
-    final chosen = await showModalBottomSheet<Gender>(
-      context: context,
-      showDragHandle: true,
-      builder: (ctx) {
-        return SafeArea(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              const SizedBox(height: 6),
-              const Text('Select Child Gender', style: TextStyle(fontWeight: FontWeight.w600)),
-              const SizedBox(height: 8),
-              for (final g in const [Gender.female, Gender.male])
-                ListTile(
-                  leading: Icon(g.icon),
-                  title: Text(g.label),
-                  onTap: () => Navigator.pop(ctx, g),
-                ),
-              const SizedBox(height: 12),
-            ],
-          ),
-        );
-      },
-    );
-
-    if (chosen == null) return;
-
-    final birthday = await _pickBirthday(context, initial: null);
-
-    store.addChild(
-      fromNodeId: fromNodeId,
-      name: name,
-      childGender: chosen,
-      birthday: birthday,
-    );
-  }
-
-  Future<String?> _promptText(
-    BuildContext context, {
-    required String title,
-    required String initial,
-  }) async {
-    final c = TextEditingController(text: initial);
-
-    return showDialog<String>(
-      context: context,
-      builder: (ctx) {
-        return AlertDialog(
-          title: Text(title),
-          content: TextField(
-            controller: c,
-            autofocus: true,
-            decoration: const InputDecoration(
-              hintText: 'Enter name',
-              border: OutlineInputBorder(),
-            ),
-            onSubmitted: (_) => Navigator.pop(ctx, c.text),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(ctx),
-              child: const Text('Cancel'),
-            ),
-            FilledButton(
-              onPressed: () => Navigator.pop(ctx, c.text),
-              child: const Text('Save'),
-            ),
-          ],
-        );
-      },
-    );
-  }
 }
 
 class _AnimatedNode extends StatefulWidget {
@@ -1884,9 +2195,7 @@ class _MemberCard extends StatelessWidget {
   final bool showPorts;
   final Offset? hoverLocal;
   final Size size;
-
   final bool isSelected;
-
   final void Function(_LinkPort port, Offset globalStart) onStartPortDrag;
   final void Function(Offset globalPos) onUpdatePortDrag;
   final void Function(Offset globalPos) onEndPortDrag;
@@ -1945,7 +2254,6 @@ class _MemberCard extends StatelessWidget {
     return Container(
       decoration: BoxDecoration(
         borderRadius: BorderRadius.circular(16),
-        // ✅ Blue outline persists only for Ctrl-selected tiles
         border: isSelected ? Border.all(color: const Color(0xFF4C7DFF), width: 2) : null,
       ),
       child: Material(
@@ -1962,15 +2270,7 @@ class _MemberCard extends StatelessWidget {
                 padding: const EdgeInsets.all(10),
                 child: Row(
                   children: [
-                    Container(
-                      width: 42,
-                      height: 42,
-                      decoration: BoxDecoration(
-                        color: node.gender.tone,
-                        borderRadius: BorderRadius.circular(12),
-                      ),
-                      child: Icon(node.gender.icon, color: Colors.black87),
-                    ),
+                    _FamilyTreePageState()._buildMemberPhoto(node),
                     const SizedBox(width: 10),
                     Expanded(
                       child: Column(
@@ -2173,6 +2473,12 @@ class _LinkPreviewPainter extends CustomPainter {
   }
 }
 
+class _Group {
+  _Group({required this.parentIds});
+  final List<int> parentIds;
+  final List<int> childIds = [];
+}
+
 class _ConnectorPainter extends CustomPainter {
   _ConnectorPainter({
     required this.store,
@@ -2341,10 +2647,4 @@ class _ConnectorPainter extends CustomPainter {
         oldDelegate.store != store ||
         oldDelegate.cardSize != cardSize;
   }
-}
-
-class _Group {
-  _Group({required this.parentIds});
-  final List<int> parentIds;
-  final List<int> childIds = [];
 }
