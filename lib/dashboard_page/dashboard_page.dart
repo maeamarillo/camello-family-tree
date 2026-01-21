@@ -86,14 +86,14 @@ class FamilyNode {
 
   Offset manualOffset = Offset.zero;
   DateTime? birthday;
-  String? photoPath; // For mobile/desktop
-  Uint8List? photoBytes; // For web
+  String? photoPath;
+  Uint8List? photoBytes;
 
   bool get hasPhoto => kIsWeb ? photoBytes != null : photoPath != null;
-  
+
   ImageProvider get photoProvider {
     if (kIsWeb) {
-      return photoBytes != null 
+      return photoBytes != null
           ? MemoryImage(photoBytes!)
           : const AssetImage('assets/placeholder.png') as ImageProvider;
     } else {
@@ -811,6 +811,32 @@ class FamilyTreePage extends StatefulWidget {
 
 enum _LinkPort { parentTop, childBottom, spouseLeft, spouseRight }
 
+Widget _buildMemberPhoto(FamilyNode node) {
+  return ClipRRect(
+    borderRadius: BorderRadius.circular(12),
+    child: Container(
+      width: 42,
+      height: 42,
+      color: !node.hasPhoto ? node.gender.tone : null,
+      child: !node.hasPhoto
+          ? Icon(node.gender.icon, color: Colors.black87)
+          : Image(
+              image: node.photoProvider,
+              fit: BoxFit.cover,
+              errorBuilder: (context, error, stackTrace) {
+                return Container(
+                  color: node.gender.tone,
+                  child: Icon(
+                    node.gender.icon,
+                    color: Colors.black87,
+                  ),
+                );
+              },
+            ),
+    ),
+  );
+}
+
 class _FamilyTreePageState extends State<FamilyTreePage> {
   late final FamilyTreeStore store;
 
@@ -845,6 +871,9 @@ class _FamilyTreePageState extends State<FamilyTreePage> {
   final Set<int> _ctrlSelectedIds = <int>{};
 
   final ImagePicker _imagePicker = ImagePicker();
+
+  // ✅ NEW: controller for the horizontal options list so last item won't get clipped
+  final ScrollController _actionsCtrl = ScrollController();
 
   bool get _ctrlPressed {
     final kb = HardwareKeyboard.instance;
@@ -993,14 +1022,8 @@ class _FamilyTreePageState extends State<FamilyTreePage> {
     }
 
     if (photoBytes != null) {
-      // For web, we only store bytes. For mobile/desktop, we store both path and bytes
-      if (kIsWeb) {
-        store.setPhoto(nodeId, null, photoBytes);
-      } else {
-        // On mobile/desktop, we can't store the path from picker directly
-        // We'll just store the bytes for now
-        store.setPhoto(nodeId, null, photoBytes);
-      }
+      store.setPhoto(nodeId, null, photoBytes);
+
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(content: Text('Photo updated')),
@@ -1011,7 +1034,7 @@ class _FamilyTreePageState extends State<FamilyTreePage> {
 
   void _viewPhotoFullScreen(FamilyNode node) {
     if (!node.hasPhoto) return;
-    
+
     Navigator.push(
       context,
       MaterialPageRoute(
@@ -1069,32 +1092,6 @@ class _FamilyTreePageState extends State<FamilyTreePage> {
     );
   }
 
-  Widget _buildMemberPhoto(FamilyNode node) {
-    return ClipRRect(
-      borderRadius: BorderRadius.circular(12),
-      child: Container(
-        width: 42,
-        height: 42,
-        color: !node.hasPhoto ? node.gender.tone : null,
-        child: !node.hasPhoto
-            ? Icon(node.gender.icon, color: Colors.black87)
-            : Image(
-                image: node.photoProvider,
-                fit: BoxFit.cover,
-                errorBuilder: (context, error, stackTrace) {
-                  return Container(
-                    color: node.gender.tone,
-                    child: Icon(
-                      node.gender.icon,
-                      color: Colors.black87,
-                    ),
-                  );
-                },
-              ),
-      ),
-    );
-  }
-
   @override
   void initState() {
     super.initState();
@@ -1115,6 +1112,7 @@ class _FamilyTreePageState extends State<FamilyTreePage> {
   void dispose() {
     store.dispose();
     _tc.dispose();
+    _actionsCtrl.dispose(); // ✅ NEW
     super.dispose();
   }
 
@@ -1285,6 +1283,30 @@ class _FamilyTreePageState extends State<FamilyTreePage> {
     }
   }
 
+  Future<void> _handlePortTap(int nodeId, _LinkPort port) async {
+    if (_isLinking) return;
+
+    if (_ctrlSelectedIds.isNotEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Selection active. Ctrl+Click tiles to unselect first.')),
+      );
+      return;
+    }
+
+    switch (port) {
+      case _LinkPort.parentTop:
+        await _addParentFlow(context, personId: nodeId);
+        break;
+      case _LinkPort.childBottom:
+        await _addChildFlow(context, fromNodeId: nodeId);
+        break;
+      case _LinkPort.spouseLeft:
+      case _LinkPort.spouseRight:
+        await _addSpouseFlow(context, personId: nodeId);
+        break;
+    }
+  }
+
   Future<void> _logout() async {
     final ok = await showDialog<bool>(
       context: context,
@@ -1445,7 +1467,7 @@ class _FamilyTreePageState extends State<FamilyTreePage> {
     if (chosen == null) return;
 
     final birthday = await _pickBirthday(context, initial: null);
-    
+
     final photoBytes = await _addPhotoFlow(context);
 
     store.addRoot(
@@ -1468,7 +1490,7 @@ class _FamilyTreePageState extends State<FamilyTreePage> {
     if (chosen == null) return;
 
     final birthday = await _pickBirthday(context, initial: null);
-    
+
     final photoBytes = await _addPhotoFlow(context);
 
     store.addStandalone(
@@ -1487,163 +1509,240 @@ class _FamilyTreePageState extends State<FamilyTreePage> {
       return;
     }
 
-    final rootContext = context;
+    final node = store.getNode(nodeId);
 
     await showModalBottomSheet(
-      context: rootContext,
-      showDragHandle: true,
-      backgroundColor: Colors.white,
-      isScrollControlled: true,
+      context: context,
+      backgroundColor: Colors.transparent,
+      enableDrag: true,
+      isScrollControlled: false,
       builder: (ctx) {
-        final node = store.getNode(nodeId);
+        return Container(
+          margin: const EdgeInsets.all(16),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.end,
+            children: [
+              Align(
+                alignment: Alignment.topRight,
+                child: GestureDetector(
+                  onTap: () => Navigator.pop(ctx),
+                  child: Container(
+                    width: 40,
+                    height: 40,
+                    decoration: BoxDecoration(
+                      color: Colors.white,
+                      shape: BoxShape.circle,
+                      boxShadow: [
+                        BoxShadow(
+                          color: Colors.black.withOpacity(0.1),
+                          blurRadius: 8,
+                          offset: const Offset(0, 2),
+                        ),
+                      ],
+                    ),
+                    child: const Icon(Icons.close, color: Colors.black54),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 12),
 
-        return SafeArea(
-          child: DraggableScrollableSheet(
-            expand: false,
-            initialChildSize: 0.6,
-            minChildSize: 0.35,
-            maxChildSize: 0.9,
-            builder: (sheetContext, scrollController) {
-              return SingleChildScrollView(
-                controller: scrollController,
-                child: Padding(
-                  padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Row(
+              Container(
+                padding: const EdgeInsets.all(16),
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  borderRadius: BorderRadius.circular(24),
+                  boxShadow: [
+                    BoxShadow(
+                      color: Colors.black.withOpacity(0.1),
+                      blurRadius: 16,
+                      offset: const Offset(0, 4),
+                    ),
+                  ],
+                ),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Padding(
+                      padding: const EdgeInsets.only(bottom: 16),
+                      child: Row(
                         children: [
                           _buildPhotoPreview(node),
-                          const SizedBox(width: 10),
+                          const SizedBox(width: 12),
                           Expanded(
                             child: Column(
                               crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
                                 Text(
                                   node.name,
-                                  style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w600),
+                                  style: const TextStyle(
+                                    fontSize: 16,
+                                    fontWeight: FontWeight.w600,
+                                  ),
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
                                 ),
                                 const SizedBox(height: 4),
-                                Text(
-                                  node.gender.label,
-                                  style: TextStyle(color: Colors.grey.shade700),
+                                Row(
+                                  children: [
+                                    Icon(node.gender.icon, size: 14, color: Colors.grey.shade600),
+                                    const SizedBox(width: 4),
+                                    Text(
+                                      node.gender.label,
+                                      style: TextStyle(
+                                        color: Colors.grey.shade600,
+                                        fontSize: 12,
+                                      ),
+                                    ),
+                                  ],
                                 ),
                               ],
                             ),
                           ),
                         ],
                       ),
-                      const SizedBox(height: 12),
-                      
-                      ListTile(
-                        leading: const Icon(Icons.photo),
-                        title: const Text('Edit Photo'),
-                        subtitle: Text(node.hasPhoto ? 'Photo attached' : 'No photo'),
-                        onTap: () async {
-                          Navigator.pop(ctx);
-                          await _handlePhotoAction(nodeId);
-                        },
-                      ),
-                      
-                      if (node.hasPhoto)
-                        ListTile(
-                          leading: const Icon(Icons.visibility),
-                          title: const Text('View Photo'),
-                          onTap: () {
-                            Navigator.pop(ctx);
-                            _viewPhotoFullScreen(node);
-                          },
-                        ),
-                      
-                      const Divider(),
-                      
-                      ListTile(
-                        leading: const Icon(Icons.edit),
-                        title: const Text('Edit Name'),
-                        onTap: () async {
-                          Navigator.pop(ctx);
-                          final name = await _promptText(
-                            rootContext,
-                            title: 'Edit Name',
-                            initial: node.name,
-                          );
-                          if (name != null) store.renameNode(nodeId, name);
-                        },
-                      ),
-                      ListTile(
-                        leading: const Icon(Icons.cake_outlined),
-                        title: const Text('Edit Birthday'),
-                        subtitle: Text(
-                          node.birthday == null ? 'Not set' : _formatDate(node.birthday!),
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                        onTap: () async {
-                          Navigator.pop(ctx);
-                          final picked = await _pickBirthday(rootContext, initial: node.birthday);
-                          if (picked != null) store.setBirthday(nodeId, picked);
-                        },
-                      ),
-                      const Divider(),
-                      ListTile(
-                        leading: const Icon(Icons.favorite),
-                        title: const Text('Add Spouse (opposite gender)'),
-                        onTap: () async {
-                          Navigator.pop(ctx);
-                          await _addSpouseFlow(rootContext, personId: nodeId);
-                        },
-                      ),
-                      ListTile(
-                        leading: const Icon(Icons.arrow_upward),
-                        title: const Text('Add Parent'),
-                        onTap: () async {
-                          Navigator.pop(ctx);
-                          await _addParentFlow(rootContext, personId: nodeId);
-                        },
-                      ),
-                      ListTile(
-                        leading: const Icon(Icons.arrow_downward),
-                        title: const Text('Add Child'),
-                        onTap: () async {
-                          Navigator.pop(ctx);
-                          await _addChildFlow(rootContext, fromNodeId: nodeId);
-                        },
-                      ),
-                      const Divider(),
-                      ListTile(
-                        leading: const Icon(Icons.delete_outline, color: Colors.redAccent),
-                        title: const Text('Delete'),
-                        onTap: () async {
-                          Navigator.pop(ctx);
-                          final ok = await showDialog<bool>(
-                            context: rootContext,
-                            builder: (dctx) => AlertDialog(
-                              title: const Text('Delete member?'),
-                              content: const Text(
-                                'This will remove the member and all related links.',
-                              ),
-                              actions: [
-                                TextButton(
-                                  onPressed: () => Navigator.pop(dctx, false),
-                                  child: const Text('Cancel'),
-                                ),
-                                FilledButton(
-                                  style: FilledButton.styleFrom(backgroundColor: Colors.redAccent),
-                                  onPressed: () => Navigator.pop(dctx, true),
-                                  child: const Text('Delete'),
-                                ),
-                              ],
+                    ),
+
+                    // ✅ FIXED: Increased height and adjusted tile width to prevent text overflow
+                    SizedBox(
+                      height: 120, // Increased from 100 to 120
+                      child: Scrollbar(
+                        controller: _actionsCtrl,
+                        thumbVisibility: true,
+                        child: ListView(
+                          controller: _actionsCtrl,
+                          scrollDirection: Axis.horizontal,
+                          shrinkWrap: true,
+                          physics: const BouncingScrollPhysics(),
+                          padding: const EdgeInsets.only(left: 4, right: 20),
+                          children: [
+                            _HorizontalActionTile(
+                              icon: Icons.photo,
+                              title: 'Photo',
+                              subtitle: node.hasPhoto ? 'Edit' : 'Add',
+                              color: Colors.blue,
+                              onTap: () async {
+                                Navigator.pop(ctx);
+                                await _handlePhotoAction(nodeId);
+                              },
                             ),
-                          );
-                          if (ok != true) return;
-                          store.deleteNode(nodeId);
-                        },
+                            if (node.hasPhoto)
+                              _HorizontalActionTile(
+                                icon: Icons.visibility,
+                                title: 'View',
+                                subtitle: 'Photo',
+                                color: Colors.blue,
+                                onTap: () {
+                                  Navigator.pop(ctx);
+                                  _viewPhotoFullScreen(node);
+                                },
+                              ),
+                            _HorizontalActionTile(
+                              icon: Icons.edit,
+                              title: 'Edit',
+                              subtitle: 'Name',
+                              color: Colors.green,
+                              onTap: () async {
+                                Navigator.pop(ctx);
+                                final name = await _promptText(
+                                  context,
+                                  title: 'Edit Name',
+                                  initial: node.name,
+                                );
+                                if (name != null) store.renameNode(nodeId, name);
+                              },
+                            ),
+                            _HorizontalActionTile(
+                              icon: Icons.cake,
+                              title: 'Birthday',
+                              subtitle: node.birthday == null
+                                  ? 'Set'
+                                  : _formatDate(node.birthday!),
+                              color: Colors.orange,
+                              onTap: () async {
+                                Navigator.pop(ctx);
+                                final picked = await _pickBirthday(
+                                  context,
+                                  initial: node.birthday,
+                                );
+                                if (picked != null) store.setBirthday(nodeId, picked);
+                              },
+                            ),
+                            _HorizontalActionTile(
+                              icon: Icons.favorite,
+                              title: 'Add',
+                              subtitle: 'Spouse',
+                              color: Colors.pink,
+                              enabled: node.spouses.isEmpty,
+                              onTap: () async {
+                                Navigator.pop(ctx);
+                                await _addSpouseFlow(context, personId: nodeId);
+                              },
+                            ),
+                            _HorizontalActionTile(
+                              icon: Icons.arrow_upward,
+                              title: 'Add',
+                              subtitle: 'Parent',
+                              color: Colors.purple,
+                              enabled: node.parents.length < 2,
+                              onTap: () async {
+                                Navigator.pop(ctx);
+                                await _addParentFlow(context, personId: nodeId);
+                              },
+                            ),
+                            _HorizontalActionTile(
+                              icon: Icons.arrow_downward,
+                              title: 'Add',
+                              subtitle: 'Child',
+                              color: Colors.teal,
+                              onTap: () async {
+                                Navigator.pop(ctx);
+                                await _addChildFlow(context, fromNodeId: nodeId);
+                              },
+                            ),
+                            _HorizontalActionTile(
+                              icon: Icons.delete,
+                              title: 'Delete',
+                              subtitle: 'Member',
+                              color: Colors.red,
+                              onTap: () async {
+                                Navigator.pop(ctx);
+                                final ok = await showDialog<bool>(
+                                  context: context,
+                                  builder: (dctx) => AlertDialog(
+                                    title: const Text('Delete member?'),
+                                    content: const Text(
+                                      'This will remove the member and all related links.',
+                                    ),
+                                    actions: [
+                                      TextButton(
+                                        onPressed: () => Navigator.pop(dctx, false),
+                                        child: const Text('Cancel'),
+                                      ),
+                                      FilledButton(
+                                        style: FilledButton.styleFrom(
+                                          backgroundColor: Colors.redAccent,
+                                        ),
+                                        onPressed: () => Navigator.pop(dctx, true),
+                                        child: const Text('Delete'),
+                                      ),
+                                    ],
+                                  ),
+                                );
+                                if (ok != true) return;
+                                store.deleteNode(nodeId);
+                              },
+                            ),
+                          ],
+                        ),
                       ),
-                    ],
-                  ),
+                    ),
+
+                    const SizedBox(height: 8),
+                  ],
                 ),
-              );
-            },
+              ),
+            ],
           ),
         );
       },
@@ -1675,7 +1774,6 @@ class _FamilyTreePageState extends State<FamilyTreePage> {
     if (name == null) return;
 
     final birthday = await _pickBirthday(context, initial: null);
-    
     final photoBytes = await _addPhotoFlow(context);
 
     final added = store.addSpouse(
@@ -1750,7 +1848,6 @@ class _FamilyTreePageState extends State<FamilyTreePage> {
     if (chosen == null) return;
 
     final birthday = await _pickBirthday(context, initial: null);
-    
     final photoBytes = await _addPhotoFlow(context);
 
     final added = store.addParent(
@@ -1779,7 +1876,6 @@ class _FamilyTreePageState extends State<FamilyTreePage> {
     if (chosen == null) return;
 
     final birthday = await _pickBirthday(context, initial: null);
-    
     final photoBytes = await _addPhotoFlow(context);
 
     store.addChild(
@@ -1834,6 +1930,7 @@ class _FamilyTreePageState extends State<FamilyTreePage> {
               ),
             ],
           ),
+          // Removed the drawer completely
           body: Stack(
             children: [
               GestureDetector(
@@ -1951,6 +2048,7 @@ class _FamilyTreePageState extends State<FamilyTreePage> {
                             },
                             onUpdatePortDrag: (g) => _updateLink(_globalToViewport(g)),
                             onEndPortDrag: (g) => _endLink(_globalToViewport(g)),
+                            onTapPort: _handlePortTap,
                           ),
                       ],
                     ),
@@ -2098,6 +2196,98 @@ class _FamilyTreePageState extends State<FamilyTreePage> {
   }
 }
 
+class _HorizontalActionTile extends StatelessWidget {
+  final IconData icon;
+  final String title;
+  final String subtitle;
+  final Color color;
+  final VoidCallback onTap;
+  final bool enabled;
+
+  const _HorizontalActionTile({
+    required this.icon,
+    required this.title,
+    required this.subtitle,
+    required this.color,
+    required this.onTap,
+    this.enabled = true,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 4),
+      child: Material(
+        borderRadius: BorderRadius.circular(16),
+        color: enabled ? Colors.white : Colors.grey.shade100,
+        child: InkWell(
+          onTap: enabled ? onTap : null,
+          borderRadius: BorderRadius.circular(16),
+          child: Container(
+            width: 90, // Increased from 80 to 90
+            padding: const EdgeInsets.all(12),
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              crossAxisAlignment: CrossAxisAlignment.center,
+              children: [
+                Container(
+                  width: 36,
+                  height: 36,
+                  decoration: BoxDecoration(
+                    color: enabled
+                        ? color.withOpacity(0.1)
+                        : Colors.grey.withOpacity(0.1),
+                    shape: BoxShape.circle,
+                  ),
+                  child: Icon(
+                    icon,
+                    color: enabled ? color : Colors.grey,
+                    size: 18, // Reduced from 20 to 18
+                  ),
+                ),
+                const SizedBox(height: 8),
+                SizedBox(
+                  height: 32, // Fixed height for text area
+                  child: Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      Flexible(
+                        child: Text(
+                          title,
+                          style: TextStyle(
+                            fontSize: 11, // Reduced from 12 to 11
+                            fontWeight: FontWeight.w600,
+                            color: enabled ? Colors.black87 : Colors.grey,
+                          ),
+                          textAlign: TextAlign.center,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
+                      Flexible(
+                        child: Text(
+                          subtitle,
+                          style: TextStyle(
+                            fontSize: 10, // Reduced from 11 to 10
+                            color: enabled ? color : Colors.grey,
+                          ),
+                          textAlign: TextAlign.center,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 class _AnimatedNode extends StatefulWidget {
   const _AnimatedNode({
     required this.node,
@@ -2110,6 +2300,7 @@ class _AnimatedNode extends StatefulWidget {
     required this.onStartPortDrag,
     required this.onUpdatePortDrag,
     required this.onEndPortDrag,
+    required this.onTapPort,
     required this.isHovered,
     required this.isSelected,
     required this.onHoverChanged,
@@ -2129,6 +2320,8 @@ class _AnimatedNode extends StatefulWidget {
   final void Function(_LinkPort port, Offset globalStart) onStartPortDrag;
   final void Function(Offset globalPos) onUpdatePortDrag;
   final void Function(Offset globalPos) onEndPortDrag;
+
+  final void Function(int nodeId, _LinkPort port) onTapPort;
 
   final bool isHovered;
   final bool isSelected;
@@ -2172,6 +2365,7 @@ class _AnimatedNodeState extends State<_AnimatedNode> {
             onStartPortDrag: widget.onStartPortDrag,
             onUpdatePortDrag: widget.onUpdatePortDrag,
             onEndPortDrag: widget.onEndPortDrag,
+            onTapPort: widget.onTapPort,
           ),
         ),
       ),
@@ -2189,6 +2383,7 @@ class _MemberCard extends StatelessWidget {
     required this.onStartPortDrag,
     required this.onUpdatePortDrag,
     required this.onEndPortDrag,
+    required this.onTapPort,
   });
 
   final FamilyNode node;
@@ -2199,6 +2394,8 @@ class _MemberCard extends StatelessWidget {
   final void Function(_LinkPort port, Offset globalStart) onStartPortDrag;
   final void Function(Offset globalPos) onUpdatePortDrag;
   final void Function(Offset globalPos) onEndPortDrag;
+
+  final void Function(int nodeId, _LinkPort port) onTapPort;
 
   bool get _canShowParent => showPorts && node.parents.length < 2;
   bool get _canShowChild => showPorts;
@@ -2270,7 +2467,7 @@ class _MemberCard extends StatelessWidget {
                 padding: const EdgeInsets.all(10),
                 child: Row(
                   children: [
-                    _FamilyTreePageState()._buildMemberPhoto(node),
+                    _buildMemberPhoto(node),
                     const SizedBox(width: 10),
                     Expanded(
                       child: Column(
@@ -2306,45 +2503,53 @@ class _MemberCard extends StatelessWidget {
                 ),
               ),
             ),
+
             if (activePort == _LinkPort.parentTop)
               Positioned(
                 top: -10,
                 left: (size.width / 2) - 10,
                 child: _PlusPort(
-                  tooltip: 'Connect Parent',
+                  tooltip: 'Add Parent',
+                  onTap: () => onTapPort(node.id, _LinkPort.parentTop),
                   onStart: (g) => onStartPortDrag(_LinkPort.parentTop, g),
                   onUpdate: onUpdatePortDrag,
                   onEnd: onEndPortDrag,
                 ),
               ),
+
             if (activePort == _LinkPort.childBottom)
               Positioned(
                 bottom: -10,
                 left: (size.width / 2) - 10,
                 child: _PlusPort(
-                  tooltip: 'Connect Child',
+                  tooltip: 'Add Child',
+                  onTap: () => onTapPort(node.id, _LinkPort.childBottom),
                   onStart: (g) => onStartPortDrag(_LinkPort.childBottom, g),
                   onUpdate: onUpdatePortDrag,
                   onEnd: onEndPortDrag,
                 ),
               ),
+
             if (activePort == _LinkPort.spouseLeft)
               Positioned(
                 left: -10,
                 top: (size.height / 2) - 10,
                 child: _PlusPort(
-                  tooltip: 'Connect Spouse',
+                  tooltip: 'Add Spouse',
+                  onTap: () => onTapPort(node.id, _LinkPort.spouseLeft),
                   onStart: (g) => onStartPortDrag(_LinkPort.spouseLeft, g),
                   onUpdate: onUpdatePortDrag,
                   onEnd: onEndPortDrag,
                 ),
               ),
+
             if (activePort == _LinkPort.spouseRight)
               Positioned(
                 right: -10,
                 top: (size.height / 2) - 10,
                 child: _PlusPort(
-                  tooltip: 'Connect Spouse',
+                  tooltip: 'Add Spouse',
+                  onTap: () => onTapPort(node.id, _LinkPort.spouseRight),
                   onStart: (g) => onStartPortDrag(_LinkPort.spouseRight, g),
                   onUpdate: onUpdatePortDrag,
                   onEnd: onEndPortDrag,
@@ -2363,12 +2568,15 @@ class _PlusPort extends StatefulWidget {
     required this.onStart,
     required this.onUpdate,
     required this.onEnd,
+    this.onTap,
   });
 
   final String tooltip;
   final void Function(Offset globalPos) onStart;
   final void Function(Offset globalPos) onUpdate;
   final void Function(Offset globalPos) onEnd;
+
+  final VoidCallback? onTap;
 
   @override
   State<_PlusPort> createState() => _PlusPortState();
@@ -2389,53 +2597,62 @@ class _PlusPortState extends State<_PlusPort> {
 
   @override
   Widget build(BuildContext context) {
-    return Tooltip(
-      message: widget.tooltip,
-      child: Listener(
-        behavior: HitTestBehavior.translucent,
-        onPointerDown: (e) {
-          _downGlobal = e.position;
-          _lastGlobal = e.position;
-          _started = false;
-        },
-        onPointerMove: (e) {
-          if (_downGlobal == null) return;
-          _lastGlobal = e.position;
+    return GestureDetector(
+      onTap: widget.onTap,
+      child: Tooltip(
+        message: widget.tooltip,
+        child: Listener(
+          behavior: HitTestBehavior.translucent,
+          onPointerDown: (e) {
+            _downGlobal = e.position;
+            _lastGlobal = e.position;
+            _started = false;
+          },
+          onPointerMove: (e) {
+            if (_downGlobal == null) return;
+            _lastGlobal = e.position;
 
-          final dist = (e.position - _downGlobal!).distance;
+            final dist = (e.position - _downGlobal!).distance;
 
-          if (!_started && dist >= _dragStartThreshold) {
-            _started = true;
-            widget.onStart(_downGlobal!);
-          }
+            if (!_started && dist >= _dragStartThreshold) {
+              _started = true;
+              widget.onStart(_downGlobal!);
+            }
 
-          if (_started) widget.onUpdate(e.position);
-        },
-        onPointerUp: (_) {
-          if (_started) widget.onEnd(_lastGlobal ?? Offset.zero);
-          _reset();
-        },
-        onPointerCancel: (_) {
-          if (_started) widget.onEnd(_lastGlobal ?? Offset.zero);
-          _reset();
-        },
-        child: Container(
-          width: 20,
-          height: 20,
-          decoration: BoxDecoration(
-            color: Colors.white,
-            shape: BoxShape.circle,
-            border: Border.all(color: const Color(0xFFB9C0CC), width: 1),
-            boxShadow: const [
-              BoxShadow(
-                blurRadius: 6,
-                offset: Offset(0, 2),
-                color: Colors.black12,
-              ),
-            ],
-          ),
-          child: const Center(
-            child: Icon(Icons.add, size: 14, color: Color(0xFF6E7685)),
+            if (_started) {
+              widget.onUpdate(e.position);
+            }
+          },
+          onPointerUp: (_) {
+            if (_started) {
+              widget.onEnd(_lastGlobal ?? Offset.zero);
+            }
+            _reset();
+          },
+          onPointerCancel: (_) {
+            if (_started) {
+              widget.onEnd(_lastGlobal ?? Offset.zero);
+            }
+            _reset();
+          },
+          child: Container(
+            width: 20,
+            height: 20,
+            decoration: BoxDecoration(
+              color: Colors.white,
+              shape: BoxShape.circle,
+              border: Border.all(color: const Color(0xFFB9C0CC), width: 1),
+              boxShadow: const [
+                BoxShadow(
+                  blurRadius: 6,
+                  offset: Offset(0, 2),
+                  color: Colors.black12,
+                ),
+              ],
+            ),
+            child: const Center(
+              child: Icon(Icons.add, size: 14, color: Color(0xFF6E7685)),
+            ),
           ),
         ),
       ),
