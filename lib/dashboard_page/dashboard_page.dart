@@ -54,11 +54,90 @@ extension GenderUi on Gender {
 
 String _formatDate(DateTime d) {
   const months = [
-    'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
-    'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'
+    'Jan',
+    'Feb',
+    'Mar',
+    'Apr',
+    'May',
+    'Jun',
+    'Jul',
+    'Aug',
+    'Sep',
+    'Oct',
+    'Nov',
+    'Dec'
   ];
   final m = months[d.month - 1];
   return '$m ${d.day}, ${d.year}';
+}
+
+/// ✅ Details model
+class _MemberDetails {
+  final String? address;
+  final String? phone;
+  final String? company;
+  final String? jobTitle;
+  final String? fb;
+  final String? ig;
+  final String? xAccount;
+  final String? tiktok;
+
+  const _MemberDetails({
+    this.address,
+    this.phone,
+    this.company,
+    this.jobTitle,
+    this.fb,
+    this.ig,
+    this.xAccount,
+    this.tiktok,
+  });
+
+  bool get isEmpty =>
+      (address == null || address!.trim().isEmpty) &&
+      (phone == null || phone!.trim().isEmpty) &&
+      (company == null || company!.trim().isEmpty) &&
+      (jobTitle == null || jobTitle!.trim().isEmpty) &&
+      (fb == null || fb!.trim().isEmpty) &&
+      (ig == null || ig!.trim().isEmpty) &&
+      (xAccount == null || xAccount!.trim().isEmpty) &&
+      (tiktok == null || tiktok!.trim().isEmpty);
+}
+
+/// ✅ One-form result (gender + photo + birthday + details)
+class _MemberFormResult {
+  final bool saved;
+
+  final Gender gender;
+  final _MemberDetails details;
+  final DateTime? birthday;
+
+  /// If user selected a new photo, this is it.
+  final Uint8List? newPhotoBytes;
+
+  /// If user pressed "Remove photo"
+  final bool removePhoto;
+
+  /// If user pressed "Clear birthday"
+  final bool clearBirthday;
+
+  const _MemberFormResult({
+    required this.saved,
+    required this.gender,
+    required this.details,
+    required this.birthday,
+    required this.newPhotoBytes,
+    required this.removePhoto,
+    required this.clearBirthday,
+  });
+
+  const _MemberFormResult.cancel({this.gender = Gender.female})
+      : saved = false,
+        details = const _MemberDetails(),
+        birthday = null,
+        newPhotoBytes = null,
+        removePhoto = false,
+        clearBirthday = false;
 }
 
 class FamilyNode {
@@ -71,6 +150,16 @@ class FamilyNode {
     this.birthday,
     this.photoPath,
     this.photoBytes,
+
+    // ✅ details
+    this.address,
+    this.phone,
+    this.company,
+    this.jobTitle,
+    this.fb,
+    this.ig,
+    this.xAccount,
+    this.tiktok,
   });
 
   final int id;
@@ -89,18 +178,38 @@ class FamilyNode {
   String? photoPath;
   Uint8List? photoBytes;
 
-  bool get hasPhoto => kIsWeb ? photoBytes != null : photoPath != null;
+  // ✅ details
+  String? address;
+  String? phone;
+  String? company;
+  String? jobTitle;
+  String? fb;
+  String? ig;
+  String? xAccount;
+  String? tiktok;
+
+  bool get hasPhoto => kIsWeb ? photoBytes != null : photoPath != null || photoBytes != null;
+
+  bool get hasAnyDetails {
+    bool has(String? s) => s != null && s.trim().isNotEmpty;
+    return has(address) ||
+        has(phone) ||
+        has(company) ||
+        has(jobTitle) ||
+        has(fb) ||
+        has(ig) ||
+        has(xAccount) ||
+        has(tiktok);
+  }
 
   ImageProvider get photoProvider {
-    if (kIsWeb) {
-      return photoBytes != null
-          ? MemoryImage(photoBytes!)
-          : const AssetImage('assets/placeholder.png') as ImageProvider;
-    } else {
-      return photoPath != null && File(photoPath!).existsSync()
-          ? FileImage(File(photoPath!))
-          : const AssetImage('assets/placeholder.png') as ImageProvider;
+    if (photoBytes != null) return MemoryImage(photoBytes!);
+    if (!kIsWeb) {
+      if (photoPath != null && File(photoPath!).existsSync()) {
+        return FileImage(File(photoPath!));
+      }
     }
+    return const AssetImage('assets/placeholder.png');
   }
 }
 
@@ -119,6 +228,16 @@ class FamilyTreeStore extends ChangeNotifier {
     DateTime? birthday,
     String? photoPath,
     Uint8List? photoBytes,
+
+    // details
+    String? address,
+    String? phone,
+    String? company,
+    String? jobTitle,
+    String? fb,
+    String? ig,
+    String? xAccount,
+    String? tiktok,
   }) {
     final node = FamilyNode(
       id: _nextId++,
@@ -129,6 +248,15 @@ class FamilyTreeStore extends ChangeNotifier {
       birthday: birthday,
       photoPath: photoPath,
       photoBytes: photoBytes,
+
+      address: address,
+      phone: phone,
+      company: company,
+      jobTitle: jobTitle,
+      fb: fb,
+      ig: ig,
+      xAccount: xAccount,
+      tiktok: tiktok,
     );
     _nodes[node.id] = node;
     lastAddedId = node.id;
@@ -136,6 +264,12 @@ class FamilyTreeStore extends ChangeNotifier {
   }
 
   FamilyNode getNode(int id) => _nodes[id]!;
+
+  void setGender(int id, Gender g) {
+    if (!_nodes.containsKey(id)) return;
+    getNode(id).gender = g;
+    notifyListeners();
+  }
 
   void setBirthday(int id, DateTime? date) {
     if (!_nodes.containsKey(id)) return;
@@ -156,6 +290,20 @@ class FamilyTreeStore extends ChangeNotifier {
     final node = getNode(id);
     node.photoPath = null;
     node.photoBytes = null;
+    notifyListeners();
+  }
+
+  void setDetails(int id, _MemberDetails d) {
+    if (!_nodes.containsKey(id)) return;
+    final n = getNode(id);
+    n.address = d.address;
+    n.phone = d.phone;
+    n.company = d.company;
+    n.jobTitle = d.jobTitle;
+    n.fb = d.fb;
+    n.ig = d.ig;
+    n.xAccount = d.xAccount;
+    n.tiktok = d.tiktok;
     notifyListeners();
   }
 
@@ -435,8 +583,17 @@ class FamilyTreeStore extends ChangeNotifier {
     required String name,
     required Gender gender,
     DateTime? birthday,
-    String? photoPath,
     Uint8List? photoBytes,
+
+    // details
+    String? address,
+    String? phone,
+    String? company,
+    String? jobTitle,
+    String? fb,
+    String? ig,
+    String? xAccount,
+    String? tiktok,
   }) {
     final root = createNode(
       name: name,
@@ -444,8 +601,16 @@ class FamilyTreeStore extends ChangeNotifier {
       levelY: 0,
       slotX: 0,
       birthday: birthday,
-      photoPath: photoPath,
       photoBytes: photoBytes,
+
+      address: address,
+      phone: phone,
+      company: company,
+      jobTitle: jobTitle,
+      fb: fb,
+      ig: ig,
+      xAccount: xAccount,
+      tiktok: tiktok,
     );
     _stabilizeLayout();
     notifyListeners();
@@ -456,8 +621,17 @@ class FamilyTreeStore extends ChangeNotifier {
     required String name,
     required Gender gender,
     DateTime? birthday,
-    String? photoPath,
     Uint8List? photoBytes,
+
+    // details
+    String? address,
+    String? phone,
+    String? company,
+    String? jobTitle,
+    String? fb,
+    String? ig,
+    String? xAccount,
+    String? tiktok,
   }) {
     const level = 0;
 
@@ -483,8 +657,16 @@ class FamilyTreeStore extends ChangeNotifier {
       levelY: level,
       slotX: slot,
       birthday: birthday,
-      photoPath: photoPath,
       photoBytes: photoBytes,
+
+      address: address,
+      phone: phone,
+      company: company,
+      jobTitle: jobTitle,
+      fb: fb,
+      ig: ig,
+      xAccount: xAccount,
+      tiktok: tiktok,
     );
 
     _stabilizeLayout();
@@ -522,8 +704,17 @@ class FamilyTreeStore extends ChangeNotifier {
     required int personId,
     required String name,
     DateTime? birthday,
-    String? photoPath,
     Uint8List? photoBytes,
+
+    // details
+    String? address,
+    String? phone,
+    String? company,
+    String? jobTitle,
+    String? fb,
+    String? ig,
+    String? xAccount,
+    String? tiktok,
   }) {
     final person = getNode(personId);
     if (person.spouses.isNotEmpty) return null;
@@ -544,8 +735,16 @@ class FamilyTreeStore extends ChangeNotifier {
       levelY: person.levelY,
       slotX: slot,
       birthday: birthday,
-      photoPath: photoPath,
       photoBytes: photoBytes,
+
+      address: address,
+      phone: phone,
+      company: company,
+      jobTitle: jobTitle,
+      fb: fb,
+      ig: ig,
+      xAccount: xAccount,
+      tiktok: tiktok,
     );
 
     linkSpouses(aId: personId, bId: spouse.id, notify: false);
@@ -561,8 +760,17 @@ class FamilyTreeStore extends ChangeNotifier {
     required Gender parentGender,
     required String name,
     DateTime? birthday,
-    String? photoPath,
     Uint8List? photoBytes,
+
+    // details
+    String? address,
+    String? phone,
+    String? company,
+    String? jobTitle,
+    String? fb,
+    String? ig,
+    String? xAccount,
+    String? tiktok,
   }) {
     final person = getNode(personId);
     if (person.parents.length >= 2) return null;
@@ -583,8 +791,16 @@ class FamilyTreeStore extends ChangeNotifier {
         existingOtherParentId: otherParentId,
       ),
       birthday: birthday,
-      photoPath: photoPath,
       photoBytes: photoBytes,
+
+      address: address,
+      phone: phone,
+      company: company,
+      jobTitle: jobTitle,
+      fb: fb,
+      ig: ig,
+      xAccount: xAccount,
+      tiktok: tiktok,
     );
 
     linkParentChild(parentId: parent.id, childId: personId, notify: false);
@@ -607,8 +823,17 @@ class FamilyTreeStore extends ChangeNotifier {
     required String name,
     required Gender childGender,
     DateTime? birthday,
-    String? photoPath,
     Uint8List? photoBytes,
+
+    // details
+    String? address,
+    String? phone,
+    String? company,
+    String? jobTitle,
+    String? fb,
+    String? ig,
+    String? xAccount,
+    String? tiktok,
   }) {
     final from = getNode(fromNodeId);
     final slot = _nextChildSlotSmart(fromNodeId);
@@ -619,8 +844,16 @@ class FamilyTreeStore extends ChangeNotifier {
       levelY: from.levelY + 1,
       slotX: slot,
       birthday: birthday,
-      photoPath: photoPath,
       photoBytes: photoBytes,
+
+      address: address,
+      phone: phone,
+      company: company,
+      jobTitle: jobTitle,
+      fb: fb,
+      ig: ig,
+      xAccount: xAccount,
+      tiktok: tiktok,
     );
 
     linkParentChild(parentId: from.id, childId: child.id, notify: false);
@@ -677,8 +910,8 @@ class FamilyTreeStore extends ChangeNotifier {
     if (coparentId != null && coparentId != parentId) {
       final cp = getNode(coparentId);
       final (f2, m2) = parentPairForPerson(childId);
-      final canAttach = (cp.gender == Gender.female && f2 == null) ||
-          (cp.gender == Gender.male && m2 == null);
+      final canAttach =
+          (cp.gender == Gender.female && f2 == null) || (cp.gender == Gender.male && m2 == null);
 
       if (canAttach && !child.parents.contains(coparentId)) {
         linkParentChild(parentId: coparentId, childId: childId, notify: false);
@@ -713,8 +946,8 @@ class FamilyTreeStore extends ChangeNotifier {
     if (coparentId != null && coparentId != parentId) {
       final cp = getNode(coparentId);
       final (f2, m2) = parentPairForPerson(childId);
-      final canAttach = (cp.gender == Gender.female && f2 == null) ||
-          (cp.gender == Gender.male && m2 == null);
+      final canAttach =
+          (cp.gender == Gender.female && f2 == null) || (cp.gender == Gender.male && m2 == null);
 
       if (canAttach && !child.parents.contains(coparentId)) {
         linkParentChild(parentId: coparentId, childId: childId, notify: false);
@@ -826,10 +1059,7 @@ Widget _buildMemberPhoto(FamilyNode node) {
               errorBuilder: (context, error, stackTrace) {
                 return Container(
                   color: node.gender.tone,
-                  child: Icon(
-                    node.gender.icon,
-                    color: Colors.black87,
-                  ),
+                  child: Icon(node.gender.icon, color: Colors.black87),
                 );
               },
             ),
@@ -871,8 +1101,6 @@ class _FamilyTreePageState extends State<FamilyTreePage> {
   final Set<int> _ctrlSelectedIds = <int>{};
 
   final ImagePicker _imagePicker = ImagePicker();
-
-  // ✅ NEW: controller for the horizontal options list so last item won't get clipped
   final ScrollController _actionsCtrl = ScrollController();
 
   bool get _ctrlPressed {
@@ -949,89 +1177,6 @@ class _FamilyTreePageState extends State<FamilyTreePage> {
     }
   }
 
-  Future<String?> _showPhotoSourceDialog(BuildContext context) async {
-    return await showDialog<String>(
-      context: context,
-      builder: (BuildContext context) {
-        return AlertDialog(
-          title: const Text('Add Photo'),
-          content: const Text('Choose photo source'),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(context, 'gallery'),
-              child: const Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Icon(Icons.photo_library),
-                  SizedBox(width: 8),
-                  Text('Gallery'),
-                ],
-              ),
-            ),
-            TextButton(
-              onPressed: () => Navigator.pop(context, 'camera'),
-              child: const Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Icon(Icons.camera_alt),
-                  SizedBox(width: 8),
-                  Text('Camera'),
-                ],
-              ),
-            ),
-            TextButton(
-              onPressed: () => Navigator.pop(context, 'remove'),
-              child: const Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Icon(Icons.delete),
-                  SizedBox(width: 8),
-                  Text('Remove Photo'),
-                ],
-              ),
-            ),
-            TextButton(
-              onPressed: () => Navigator.pop(context),
-              child: const Text('Cancel'),
-            ),
-          ],
-        );
-      },
-    );
-  }
-
-  Future<void> _handlePhotoAction(int nodeId) async {
-    final source = await _showPhotoSourceDialog(context);
-    if (source == null) return;
-
-    if (source == 'remove') {
-      store.removePhoto(nodeId);
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Photo removed')),
-        );
-      }
-      return;
-    }
-
-    Uint8List? photoBytes;
-    if (source == 'gallery') {
-      photoBytes = await _pickImageFromGallery();
-    } else if (source == 'camera') {
-      photoBytes = await _takePhotoWithCamera();
-    }
-
-    if (photoBytes != null) {
-      store.setPhoto(nodeId, null, photoBytes);
-
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Photo updated')),
-        );
-      }
-    }
-  }
-
   void _viewPhotoFullScreen(FamilyNode node) {
     if (!node.hasPhoto) return;
 
@@ -1059,37 +1204,457 @@ class _FamilyTreePageState extends State<FamilyTreePage> {
     );
   }
 
-  Widget _buildPhotoPreview(FamilyNode node) {
-    return GestureDetector(
-      onTap: node.hasPhoto ? () => _viewPhotoFullScreen(node) : null,
-      child: Container(
-        width: 50,
-        height: 50,
-        decoration: BoxDecoration(
-          shape: BoxShape.circle,
-          color: !node.hasPhoto ? node.gender.tone : null,
-          border: Border.all(color: Colors.grey.shade300, width: 1),
-        ),
-        child: !node.hasPhoto
-            ? Icon(node.gender.icon, size: 24, color: Colors.grey.shade700)
-            : ClipOval(
-                child: Image(
-                  image: node.photoProvider,
-                  fit: BoxFit.cover,
-                  errorBuilder: (context, error, stackTrace) {
-                    return Container(
-                      color: node.gender.tone,
-                      child: Icon(
-                        node.gender.icon,
-                        size: 24,
-                        color: Colors.grey.shade700,
+  Widget _buildPhotoPreviewBytes(Uint8List? bytes, Gender g) {
+    final has = bytes != null;
+    return Container(
+      width: 54,
+      height: 54,
+      decoration: BoxDecoration(
+        shape: BoxShape.circle,
+        color: !has ? g.tone : null,
+        border: Border.all(color: Colors.grey.shade300, width: 1),
+      ),
+      child: !has
+          ? Icon(g.icon, size: 26, color: Colors.grey.shade700)
+          : ClipOval(child: Image.memory(bytes!, fit: BoxFit.cover)),
+    );
+  }
+
+  Future<DateTime?> _pickBirthday(BuildContext context, {DateTime? initial}) async {
+    final now = DateTime.now();
+    final firstDate = DateTime(1900, 1, 1);
+    final lastDate = DateTime(now.year, now.month, now.day);
+
+    final init = initial ?? DateTime(1990, 1, 1);
+    final clampedInit = init.isBefore(firstDate)
+        ? firstDate
+        : (init.isAfter(lastDate) ? lastDate : init);
+
+    return showDatePicker(
+      context: context,
+      initialDate: clampedInit,
+      firstDate: firstDate,
+      lastDate: lastDate,
+      helpText: 'Select birthday (or cancel to skip)',
+    );
+  }
+
+  /// ✅ One form: Gender + Photo + Birthday + Details
+  Future<_MemberFormResult> _promptMemberForm(
+    BuildContext context, {
+    required Gender initialGender,
+    List<Gender> allowedGenders = const [Gender.female, Gender.male],
+    _MemberDetails? initialDetails,
+    DateTime? initialBirthday,
+    Uint8List? initialPhotoBytes,
+    bool allowRemovePhoto = true,
+    bool allowClearBirthday = true,
+    String title = 'Member Info',
+  }) async {
+    final init = initialDetails ?? const _MemberDetails();
+
+    final addressCtrl = TextEditingController(text: init.address ?? '');
+    final phoneCtrl = TextEditingController(text: init.phone ?? '');
+    final companyCtrl = TextEditingController(text: init.company ?? '');
+    final jobTitleCtrl = TextEditingController(text: init.jobTitle ?? '');
+    final fbCtrl = TextEditingController(text: init.fb ?? '');
+    final igCtrl = TextEditingController(text: init.ig ?? '');
+    final xCtrl = TextEditingController(text: init.xAccount ?? '');
+    final tiktokCtrl = TextEditingController(text: init.tiktok ?? '');
+
+    String? norm(TextEditingController c) {
+      final t = c.text.trim();
+      return t.isEmpty ? null : t;
+    }
+
+    final safeAllowed = allowedGenders.isEmpty
+        ? const [Gender.female, Gender.male]
+        : allowedGenders;
+
+    final initGender =
+        safeAllowed.contains(initialGender) ? initialGender : safeAllowed.first;
+
+    final result = await showModalBottomSheet<_MemberFormResult>(
+      context: context,
+      isScrollControlled: true,
+      showDragHandle: true,
+      backgroundColor: Colors.transparent,
+      builder: (ctx) {
+        final bottomInset = MediaQuery.of(ctx).viewInsets.bottom;
+
+        Gender selectedGender = initGender;
+        Uint8List? photoBytes = initialPhotoBytes;
+        DateTime? birthday = initialBirthday;
+        bool removePhoto = false;
+        bool clearBirthday = false;
+
+        final canChangeGender = safeAllowed.length > 1;
+
+        InputDecoration deco(String hint) => InputDecoration(
+              hintText: hint,
+              border: const OutlineInputBorder(),
+              isDense: true,
+            );
+
+        Widget field(String label, TextEditingController c,
+            {TextInputType? type}) {
+          return Padding(
+            padding: const EdgeInsets.only(bottom: 12),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(label, style: const TextStyle(fontWeight: FontWeight.w600)),
+                const SizedBox(height: 6),
+                TextField(
+                  controller: c,
+                  keyboardType: type,
+                  decoration: deco(label),
+                ),
+              ],
+            ),
+          );
+        }
+
+        return StatefulBuilder(
+          builder: (ctx2, setSheetState) {
+            Future<void> pickGallery() async {
+              final bytes = await _pickImageFromGallery();
+              if (bytes == null) return;
+              setSheetState(() {
+                photoBytes = bytes;
+                removePhoto = false;
+              });
+            }
+
+            Future<void> pickCamera() async {
+              final bytes = await _takePhotoWithCamera();
+              if (bytes == null) return;
+              setSheetState(() {
+                photoBytes = bytes;
+                removePhoto = false;
+              });
+            }
+
+            Future<void> pickBday() async {
+              final picked = await _pickBirthday(context, initial: birthday);
+              if (picked == null) return;
+              setSheetState(() {
+                birthday = picked;
+                clearBirthday = false;
+              });
+            }
+
+            return Padding(
+              padding: EdgeInsets.only(bottom: bottomInset),
+              child: Container(
+                margin: const EdgeInsets.all(16),
+                padding: const EdgeInsets.all(16),
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  borderRadius: BorderRadius.circular(24),
+                  boxShadow: [
+                    BoxShadow(
+                      color: Colors.black.withOpacity(0.12),
+                      blurRadius: 18,
+                      offset: const Offset(0, 6),
+                    ),
+                  ],
+                ),
+                child: SingleChildScrollView(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          const Icon(Icons.badge_outlined),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: Text(
+                              title,
+                              style: const TextStyle(
+                                fontSize: 16,
+                                fontWeight: FontWeight.w700,
+                              ),
+                            ),
+                          ),
+                          IconButton(
+                            tooltip: 'Close',
+                            icon: const Icon(Icons.close),
+                            onPressed: () => Navigator.pop(
+                              ctx2,
+                              _MemberFormResult.cancel(gender: initGender),
+                            ),
+                          ),
+                        ],
                       ),
-                    );
-                  },
+                      const SizedBox(height: 12),
+
+                      // ✅ Gender section
+                      Text('Gender',
+                          style: TextStyle(
+                              fontWeight: FontWeight.w700,
+                              color: Colors.grey.shade800)),
+                      const SizedBox(height: 8),
+                      SegmentedButton<Gender>(
+                        segments: [
+                          for (final g in safeAllowed)
+                            ButtonSegment<Gender>(
+                              value: g,
+                              label: Text(g.label),
+                              icon: Icon(g.icon, size: 18),
+                            ),
+                        ],
+                        selected: {selectedGender},
+                        onSelectionChanged: canChangeGender
+                            ? (s) => setSheetState(() {
+                                  selectedGender = s.first;
+                                })
+                            : null,
+                      ),
+
+                      const SizedBox(height: 14),
+                      const Divider(),
+                      const SizedBox(height: 10),
+
+                      // ✅ Photo section
+                      Text('Photo',
+                          style: TextStyle(
+                              fontWeight: FontWeight.w700,
+                              color: Colors.grey.shade800)),
+                      const SizedBox(height: 8),
+                      Row(
+                        children: [
+                          _buildPhotoPreviewBytes(
+                            removePhoto ? null : photoBytes,
+                            selectedGender,
+                          ),
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: Wrap(
+                              spacing: 8,
+                              runSpacing: 8,
+                              children: [
+                                FilledButton.tonalIcon(
+                                  onPressed: pickGallery,
+                                  icon: const Icon(Icons.photo_library_outlined,
+                                      size: 18),
+                                  label: const Text('Gallery'),
+                                ),
+                                FilledButton.tonalIcon(
+                                  onPressed: pickCamera,
+                                  icon: const Icon(Icons.camera_alt_outlined,
+                                      size: 18),
+                                  label: const Text('Camera'),
+                                ),
+                                if (allowRemovePhoto)
+                                  TextButton.icon(
+                                    onPressed: () {
+                                      setSheetState(() {
+                                        removePhoto = true;
+                                        photoBytes = null;
+                                      });
+                                    },
+                                    icon: const Icon(Icons.delete_outline),
+                                    label: const Text('Remove'),
+                                  ),
+                              ],
+                            ),
+                          ),
+                        ],
+                      ),
+
+                      const SizedBox(height: 14),
+                      const Divider(),
+                      const SizedBox(height: 10),
+
+                      // ✅ Birthday section
+                      Row(
+                        children: [
+                          Expanded(
+                            child: Text(
+                              'Birthday',
+                              style: TextStyle(
+                                  fontWeight: FontWeight.w700,
+                                  color: Colors.grey.shade800),
+                            ),
+                          ),
+                          if (allowClearBirthday)
+                            TextButton(
+                              onPressed: () {
+                                setSheetState(() {
+                                  birthday = null;
+                                  clearBirthday = true;
+                                });
+                              },
+                              child: const Text('Clear'),
+                            ),
+                        ],
+                      ),
+                      const SizedBox(height: 8),
+                      InkWell(
+                        onTap: pickBday,
+                        borderRadius: BorderRadius.circular(12),
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 12, vertical: 12),
+                          decoration: BoxDecoration(
+                            border: Border.all(color: Colors.grey.shade300),
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                          child: Row(
+                            children: [
+                              const Icon(Icons.cake_outlined, size: 18),
+                              const SizedBox(width: 10),
+                              Expanded(
+                                child: Text(
+                                  (birthday == null)
+                                      ? 'Tap to select birthday'
+                                      : _formatDate(birthday!),
+                                  style: TextStyle(
+                                    color: birthday == null
+                                        ? Colors.grey.shade600
+                                        : Colors.black87,
+                                  ),
+                                ),
+                              ),
+                              const Icon(Icons.chevron_right),
+                            ],
+                          ),
+                        ),
+                      ),
+
+                      const SizedBox(height: 14),
+                      const Divider(),
+                      const SizedBox(height: 10),
+
+                      // ✅ Details section
+                      field('Address', addressCtrl),
+                      field('Tel / Cell No.', phoneCtrl,
+                          type: TextInputType.phone),
+                      field('Company', companyCtrl),
+                      field('Job Title', jobTitleCtrl),
+                      const SizedBox(height: 6),
+                      const Divider(),
+                      const SizedBox(height: 10),
+                      field('Facebook', fbCtrl),
+                      field('Instagram', igCtrl),
+                      field('X / Twitter', xCtrl),
+                      field('TikTok', tiktokCtrl),
+
+                      const SizedBox(height: 12),
+                      Row(
+                        children: [
+                          Expanded(
+                            child: FilledButton(
+                              onPressed: () {
+                                Navigator.pop(
+                                  ctx2,
+                                  _MemberFormResult(
+                                    saved: true,
+                                    gender: selectedGender,
+                                    birthday: birthday,
+                                    clearBirthday: clearBirthday,
+                                    newPhotoBytes: photoBytes,
+                                    removePhoto: removePhoto,
+                                    details: _MemberDetails(
+                                      address: norm(addressCtrl),
+                                      phone: norm(phoneCtrl),
+                                      company: norm(companyCtrl),
+                                      jobTitle: norm(jobTitleCtrl),
+                                      fb: norm(fbCtrl),
+                                      ig: norm(igCtrl),
+                                      xAccount: norm(xCtrl),
+                                      tiktok: norm(tiktokCtrl),
+                                    ),
+                                  ),
+                                );
+                              },
+                              child: const Text('Save'),
+                            ),
+                          ),
+                          const SizedBox(width: 10),
+                          TextButton(
+                            onPressed: () => Navigator.pop(
+                              ctx2,
+                              _MemberFormResult.cancel(gender: initGender),
+                            ),
+                            child: const Text('Cancel'),
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
                 ),
               ),
-      ),
+            );
+          },
+        );
+      },
     );
+
+    addressCtrl.dispose();
+    phoneCtrl.dispose();
+    companyCtrl.dispose();
+    jobTitleCtrl.dispose();
+    fbCtrl.dispose();
+    igCtrl.dispose();
+    xCtrl.dispose();
+    tiktokCtrl.dispose();
+
+    return result ?? _MemberFormResult.cancel(gender: initGender);
+  }
+
+  Future<void> _applyFormToNode(int nodeId, _MemberFormResult r) async {
+    if (!r.saved) return;
+
+    // ✅ gender
+    store.setGender(nodeId, r.gender);
+
+    // details
+    store.setDetails(nodeId, r.details);
+
+    // birthday
+    if (r.clearBirthday) {
+      store.setBirthday(nodeId, null);
+    } else {
+      store.setBirthday(nodeId, r.birthday);
+    }
+
+    // photo
+    if (r.removePhoto) {
+      store.removePhoto(nodeId);
+    } else if (r.newPhotoBytes != null) {
+      store.setPhoto(nodeId, null, r.newPhotoBytes);
+    }
+  }
+
+  Future<void> _editDetailsFlow(BuildContext context, int nodeId) async {
+    final n = store.getNode(nodeId);
+    final initial = _MemberDetails(
+      address: n.address,
+      phone: n.phone,
+      company: n.company,
+      jobTitle: n.jobTitle,
+      fb: n.fb,
+      ig: n.ig,
+      xAccount: n.xAccount,
+      tiktok: n.tiktok,
+    );
+
+    final r = await _promptMemberForm(
+      context,
+      initialGender: n.gender,
+      allowedGenders: const [Gender.female, Gender.male],
+      initialDetails: initial,
+      initialBirthday: n.birthday,
+      initialPhotoBytes: n.photoBytes,
+      allowRemovePhoto: true,
+      allowClearBirthday: true,
+      title: 'View / Edit Details',
+    );
+
+    await _applyFormToNode(nodeId, r);
   }
 
   @override
@@ -1112,7 +1677,7 @@ class _FamilyTreePageState extends State<FamilyTreePage> {
   void dispose() {
     store.dispose();
     _tc.dispose();
-    _actionsCtrl.dispose(); // ✅ NEW
+    _actionsCtrl.dispose();
     super.dispose();
   }
 
@@ -1338,25 +1903,6 @@ class _FamilyTreePageState extends State<FamilyTreePage> {
     setState(() => _zoomValue = 1.0);
   }
 
-  Future<DateTime?> _pickBirthday(BuildContext context, {DateTime? initial}) async {
-    final now = DateTime.now();
-    final firstDate = DateTime(1900, 1, 1);
-    final lastDate = DateTime(now.year, now.month, now.day);
-
-    final init = initial ?? DateTime(1990, 1, 1);
-    final clampedInit = init.isBefore(firstDate)
-        ? firstDate
-        : (init.isAfter(lastDate) ? lastDate : init);
-
-    return showDatePicker(
-      context: context,
-      initialDate: clampedInit,
-      firstDate: firstDate,
-      lastDate: lastDate,
-      helpText: 'Select birthday (or cancel to skip)',
-    );
-  }
-
   Future<String?> _promptText(
     BuildContext context, {
     required String title,
@@ -1393,68 +1939,6 @@ class _FamilyTreePageState extends State<FamilyTreePage> {
     );
   }
 
-  Future<Gender?> _selectGender(BuildContext context) async {
-    return await showModalBottomSheet<Gender>(
-      context: context,
-      showDragHandle: true,
-      builder: (ctx) {
-        return SafeArea(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              const SizedBox(height: 6),
-              const Text('Select Gender', style: TextStyle(fontWeight: FontWeight.w600)),
-              const SizedBox(height: 8),
-              for (final g in const [Gender.female, Gender.male])
-                ListTile(
-                  leading: Icon(g.icon),
-                  title: Text(g.label),
-                  onTap: () => Navigator.pop(ctx, g),
-                ),
-              const SizedBox(height: 12),
-            ],
-          ),
-        );
-      },
-    );
-  }
-
-  Future<Uint8List?> _addPhotoFlow(BuildContext context) async {
-    final source = await showDialog<String>(
-      context: context,
-      builder: (BuildContext context) {
-        return AlertDialog(
-          title: const Text('Add Photo (Optional)'),
-          content: const Text('Would you like to add a photo for this member?'),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(context, 'gallery'),
-              child: const Text('Gallery'),
-            ),
-            TextButton(
-              onPressed: () => Navigator.pop(context, 'camera'),
-              child: const Text('Camera'),
-            ),
-            TextButton(
-              onPressed: () => Navigator.pop(context, 'skip'),
-              child: const Text('Skip'),
-            ),
-          ],
-        );
-      },
-    );
-
-    if (source == 'skip') return null;
-
-    if (source == 'gallery') {
-      return await _pickImageFromGallery();
-    } else if (source == 'camera') {
-      return await _takePhotoWithCamera();
-    }
-
-    return null;
-  }
-
   Future<void> _addFirstMemberFlow(BuildContext context) async {
     final name = await _promptText(
       context,
@@ -1463,18 +1947,29 @@ class _FamilyTreePageState extends State<FamilyTreePage> {
     );
     if (name == null) return;
 
-    final chosen = await _selectGender(context);
-    if (chosen == null) return;
-
-    final birthday = await _pickBirthday(context, initial: null);
-
-    final photoBytes = await _addPhotoFlow(context);
+    final r = await _promptMemberForm(
+      context,
+      initialGender: Gender.female,
+      allowedGenders: const [Gender.female, Gender.male],
+      title: 'Add Member Info',
+      allowRemovePhoto: false,
+      allowClearBirthday: true,
+    );
+    if (!r.saved) return;
 
     store.addRoot(
       name: name,
-      gender: chosen,
-      birthday: birthday,
-      photoBytes: photoBytes,
+      gender: r.gender,
+      birthday: r.clearBirthday ? null : r.birthday,
+      photoBytes: r.removePhoto ? null : r.newPhotoBytes,
+      address: r.details.address,
+      phone: r.details.phone,
+      company: r.details.company,
+      jobTitle: r.details.jobTitle,
+      fb: r.details.fb,
+      ig: r.details.ig,
+      xAccount: r.details.xAccount,
+      tiktok: r.details.tiktok,
     );
   }
 
@@ -1486,18 +1981,29 @@ class _FamilyTreePageState extends State<FamilyTreePage> {
     );
     if (name == null) return;
 
-    final chosen = await _selectGender(context);
-    if (chosen == null) return;
-
-    final birthday = await _pickBirthday(context, initial: null);
-
-    final photoBytes = await _addPhotoFlow(context);
+    final r = await _promptMemberForm(
+      context,
+      initialGender: Gender.female,
+      allowedGenders: const [Gender.female, Gender.male],
+      title: 'Add Member Info',
+      allowRemovePhoto: false,
+      allowClearBirthday: true,
+    );
+    if (!r.saved) return;
 
     store.addStandalone(
       name: name,
-      gender: chosen,
-      birthday: birthday,
-      photoBytes: photoBytes,
+      gender: r.gender,
+      birthday: r.clearBirthday ? null : r.birthday,
+      photoBytes: r.removePhoto ? null : r.newPhotoBytes,
+      address: r.details.address,
+      phone: r.details.phone,
+      company: r.details.company,
+      jobTitle: r.details.jobTitle,
+      fb: r.details.fb,
+      ig: r.details.ig,
+      xAccount: r.details.xAccount,
+      tiktok: r.details.tiktok,
     );
   }
 
@@ -1546,7 +2052,6 @@ class _FamilyTreePageState extends State<FamilyTreePage> {
                 ),
               ),
               const SizedBox(height: 12),
-
               Container(
                 padding: const EdgeInsets.all(16),
                 decoration: BoxDecoration(
@@ -1567,7 +2072,21 @@ class _FamilyTreePageState extends State<FamilyTreePage> {
                       padding: const EdgeInsets.only(bottom: 16),
                       child: Row(
                         children: [
-                          _buildPhotoPreview(node),
+                          GestureDetector(
+                            onTap: node.hasPhoto ? () => _viewPhotoFullScreen(node) : null,
+                            child: Container(
+                              width: 50,
+                              height: 50,
+                              decoration: BoxDecoration(
+                                shape: BoxShape.circle,
+                                color: !node.hasPhoto ? node.gender.tone : null,
+                                border: Border.all(color: Colors.grey.shade300, width: 1),
+                              ),
+                              child: !node.hasPhoto
+                                  ? Icon(node.gender.icon, size: 24, color: Colors.grey.shade700)
+                                  : ClipOval(child: Image(image: node.photoProvider, fit: BoxFit.cover)),
+                            ),
+                          ),
                           const SizedBox(width: 12),
                           Expanded(
                             child: Column(
@@ -1575,10 +2094,7 @@ class _FamilyTreePageState extends State<FamilyTreePage> {
                               children: [
                                 Text(
                                   node.name,
-                                  style: const TextStyle(
-                                    fontSize: 16,
-                                    fontWeight: FontWeight.w600,
-                                  ),
+                                  style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
                                   maxLines: 1,
                                   overflow: TextOverflow.ellipsis,
                                 ),
@@ -1589,11 +2105,20 @@ class _FamilyTreePageState extends State<FamilyTreePage> {
                                     const SizedBox(width: 4),
                                     Text(
                                       node.gender.label,
-                                      style: TextStyle(
-                                        color: Colors.grey.shade600,
-                                        fontSize: 12,
-                                      ),
+                                      style: TextStyle(color: Colors.grey.shade600, fontSize: 12),
                                     ),
+                                    if (node.birthday != null) ...[
+                                      const SizedBox(width: 10),
+                                      const Icon(Icons.cake_outlined, size: 14),
+                                      const SizedBox(width: 4),
+                                      Flexible(
+                                        child: Text(
+                                          _formatDate(node.birthday!),
+                                          style: TextStyle(color: Colors.grey.shade600, fontSize: 12),
+                                          overflow: TextOverflow.ellipsis,
+                                        ),
+                                      ),
+                                    ],
                                   ],
                                 ),
                               ],
@@ -1602,10 +2127,8 @@ class _FamilyTreePageState extends State<FamilyTreePage> {
                         ],
                       ),
                     ),
-
-                    // ✅ FIXED: Increased height and adjusted tile width to prevent text overflow
                     SizedBox(
-                      height: 120, // Increased from 100 to 120
+                      height: 120,
                       child: Scrollbar(
                         controller: _actionsCtrl,
                         thumbVisibility: true,
@@ -1617,26 +2140,15 @@ class _FamilyTreePageState extends State<FamilyTreePage> {
                           padding: const EdgeInsets.only(left: 4, right: 20),
                           children: [
                             _HorizontalActionTile(
-                              icon: Icons.photo,
-                              title: 'Photo',
-                              subtitle: node.hasPhoto ? 'Edit' : 'Add',
-                              color: Colors.blue,
+                              icon: Icons.badge_outlined,
+                              title: 'Details',
+                              subtitle: 'View / Edit',
+                              color: Colors.indigo,
                               onTap: () async {
                                 Navigator.pop(ctx);
-                                await _handlePhotoAction(nodeId);
+                                await _editDetailsFlow(context, nodeId);
                               },
                             ),
-                            if (node.hasPhoto)
-                              _HorizontalActionTile(
-                                icon: Icons.visibility,
-                                title: 'View',
-                                subtitle: 'Photo',
-                                color: Colors.blue,
-                                onTap: () {
-                                  Navigator.pop(ctx);
-                                  _viewPhotoFullScreen(node);
-                                },
-                              ),
                             _HorizontalActionTile(
                               icon: Icons.edit,
                               title: 'Edit',
@@ -1650,22 +2162,6 @@ class _FamilyTreePageState extends State<FamilyTreePage> {
                                   initial: node.name,
                                 );
                                 if (name != null) store.renameNode(nodeId, name);
-                              },
-                            ),
-                            _HorizontalActionTile(
-                              icon: Icons.cake,
-                              title: 'Birthday',
-                              subtitle: node.birthday == null
-                                  ? 'Set'
-                                  : _formatDate(node.birthday!),
-                              color: Colors.orange,
-                              onTap: () async {
-                                Navigator.pop(ctx);
-                                final picked = await _pickBirthday(
-                                  context,
-                                  initial: node.birthday,
-                                );
-                                if (picked != null) store.setBirthday(nodeId, picked);
                               },
                             ),
                             _HorizontalActionTile(
@@ -1711,18 +2207,14 @@ class _FamilyTreePageState extends State<FamilyTreePage> {
                                   context: context,
                                   builder: (dctx) => AlertDialog(
                                     title: const Text('Delete member?'),
-                                    content: const Text(
-                                      'This will remove the member and all related links.',
-                                    ),
+                                    content: const Text('This will remove the member and all related links.'),
                                     actions: [
                                       TextButton(
                                         onPressed: () => Navigator.pop(dctx, false),
                                         child: const Text('Cancel'),
                                       ),
                                       FilledButton(
-                                        style: FilledButton.styleFrom(
-                                          backgroundColor: Colors.redAccent,
-                                        ),
+                                        style: FilledButton.styleFrom(backgroundColor: Colors.redAccent),
                                         onPressed: () => Navigator.pop(dctx, true),
                                         child: const Text('Delete'),
                                       ),
@@ -1737,7 +2229,6 @@ class _FamilyTreePageState extends State<FamilyTreePage> {
                         ),
                       ),
                     ),
-
                     const SizedBox(height: 8),
                   ],
                 ),
@@ -1773,14 +2264,31 @@ class _FamilyTreePageState extends State<FamilyTreePage> {
     );
     if (name == null) return;
 
-    final birthday = await _pickBirthday(context, initial: null);
-    final photoBytes = await _addPhotoFlow(context);
+    final spouseGender = person.gender.opposite;
+
+    final r = await _promptMemberForm(
+      context,
+      initialGender: spouseGender,
+      allowedGenders: [spouseGender], // locked
+      title: 'Add Spouse Info',
+      allowRemovePhoto: false,
+      allowClearBirthday: true,
+    );
+    if (!r.saved) return;
 
     final added = store.addSpouse(
       personId: personId,
       name: name,
-      birthday: birthday,
-      photoBytes: photoBytes,
+      birthday: r.clearBirthday ? null : r.birthday,
+      photoBytes: r.removePhoto ? null : r.newPhotoBytes,
+      address: r.details.address,
+      phone: r.details.phone,
+      company: r.details.company,
+      jobTitle: r.details.jobTitle,
+      fb: r.details.fb,
+      ig: r.details.ig,
+      xAccount: r.details.xAccount,
+      tiktok: r.details.tiktok,
     );
 
     if (added == null) {
@@ -1802,13 +2310,6 @@ class _FamilyTreePageState extends State<FamilyTreePage> {
 
     final (femaleP, maleP) = store.parentPairForPerson(personId);
 
-    final name = await _promptText(
-      context,
-      title: 'Parent Name',
-      initial: 'New Parent',
-    );
-    if (name == null) return;
-
     final options = <Gender>[
       if (femaleP == null) Gender.female,
       if (maleP == null) Gender.male,
@@ -1821,42 +2322,39 @@ class _FamilyTreePageState extends State<FamilyTreePage> {
       return;
     }
 
-    final chosen = await showModalBottomSheet<Gender>(
-      context: context,
-      showDragHandle: true,
-      builder: (ctx) {
-        return SafeArea(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              const SizedBox(height: 6),
-              const Text('Select Parent Gender', style: TextStyle(fontWeight: FontWeight.w600)),
-              const SizedBox(height: 8),
-              for (final g in options)
-                ListTile(
-                  leading: Icon(g.icon),
-                  title: Text(g.label),
-                  onTap: () => Navigator.pop(ctx, g),
-                ),
-              const SizedBox(height: 12),
-            ],
-          ),
-        );
-      },
+    final name = await _promptText(
+      context,
+      title: 'Parent Name',
+      initial: 'New Parent',
     );
+    if (name == null) return;
 
-    if (chosen == null) return;
-
-    final birthday = await _pickBirthday(context, initial: null);
-    final photoBytes = await _addPhotoFlow(context);
+    final r = await _promptMemberForm(
+      context,
+      initialGender: options.first,
+      allowedGenders: options, // constrained if only 1 option
+      title: 'Add Parent Info',
+      allowRemovePhoto: false,
+      allowClearBirthday: true,
+    );
+    if (!r.saved) return;
 
     final added = store.addParent(
       personId: personId,
-      parentGender: chosen,
+      parentGender: r.gender,
       name: name,
-      birthday: birthday,
-      photoBytes: photoBytes,
+      birthday: r.clearBirthday ? null : r.birthday,
+      photoBytes: r.removePhoto ? null : r.newPhotoBytes,
+      address: r.details.address,
+      phone: r.details.phone,
+      company: r.details.company,
+      jobTitle: r.details.jobTitle,
+      fb: r.details.fb,
+      ig: r.details.ig,
+      xAccount: r.details.xAccount,
+      tiktok: r.details.tiktok,
     );
+
     if (added == null) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Could not add parent (blocked).')),
@@ -1872,18 +2370,30 @@ class _FamilyTreePageState extends State<FamilyTreePage> {
     );
     if (name == null) return;
 
-    final chosen = await _selectGender(context);
-    if (chosen == null) return;
-
-    final birthday = await _pickBirthday(context, initial: null);
-    final photoBytes = await _addPhotoFlow(context);
+    final r = await _promptMemberForm(
+      context,
+      initialGender: Gender.female,
+      allowedGenders: const [Gender.female, Gender.male],
+      title: 'Add Child Info',
+      allowRemovePhoto: false,
+      allowClearBirthday: true,
+    );
+    if (!r.saved) return;
 
     store.addChild(
       fromNodeId: fromNodeId,
       name: name,
-      childGender: chosen,
-      birthday: birthday,
-      photoBytes: photoBytes,
+      childGender: r.gender,
+      birthday: r.clearBirthday ? null : r.birthday,
+      photoBytes: r.removePhoto ? null : r.newPhotoBytes,
+      address: r.details.address,
+      phone: r.details.phone,
+      company: r.details.company,
+      jobTitle: r.details.jobTitle,
+      fb: r.details.fb,
+      ig: r.details.ig,
+      xAccount: r.details.xAccount,
+      tiktok: r.details.tiktok,
     );
   }
 
@@ -1930,7 +2440,6 @@ class _FamilyTreePageState extends State<FamilyTreePage> {
               ),
             ],
           ),
-          // Removed the drawer completely
           body: Stack(
             children: [
               GestureDetector(
@@ -2224,7 +2733,7 @@ class _HorizontalActionTile extends StatelessWidget {
           onTap: enabled ? onTap : null,
           borderRadius: BorderRadius.circular(16),
           child: Container(
-            width: 90, // Increased from 80 to 90
+            width: 90,
             padding: const EdgeInsets.all(12),
             child: Column(
               mainAxisAlignment: MainAxisAlignment.center,
@@ -2234,20 +2743,18 @@ class _HorizontalActionTile extends StatelessWidget {
                   width: 36,
                   height: 36,
                   decoration: BoxDecoration(
-                    color: enabled
-                        ? color.withOpacity(0.1)
-                        : Colors.grey.withOpacity(0.1),
+                    color: enabled ? color.withOpacity(0.1) : Colors.grey.withOpacity(0.1),
                     shape: BoxShape.circle,
                   ),
                   child: Icon(
                     icon,
                     color: enabled ? color : Colors.grey,
-                    size: 18, // Reduced from 20 to 18
+                    size: 18,
                   ),
                 ),
                 const SizedBox(height: 8),
                 SizedBox(
-                  height: 32, // Fixed height for text area
+                  height: 32,
                   child: Column(
                     mainAxisAlignment: MainAxisAlignment.center,
                     children: [
@@ -2255,7 +2762,7 @@ class _HorizontalActionTile extends StatelessWidget {
                         child: Text(
                           title,
                           style: TextStyle(
-                            fontSize: 11, // Reduced from 12 to 11
+                            fontSize: 11,
                             fontWeight: FontWeight.w600,
                             color: enabled ? Colors.black87 : Colors.grey,
                           ),
@@ -2267,10 +2774,7 @@ class _HorizontalActionTile extends StatelessWidget {
                       Flexible(
                         child: Text(
                           subtitle,
-                          style: TextStyle(
-                            fontSize: 10, // Reduced from 11 to 10
-                            color: enabled ? color : Colors.grey,
-                          ),
+                          style: TextStyle(fontSize: 10, color: enabled ? color : Colors.grey),
                           textAlign: TextAlign.center,
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
@@ -2503,7 +3007,6 @@ class _MemberCard extends StatelessWidget {
                 ),
               ),
             ),
-
             if (activePort == _LinkPort.parentTop)
               Positioned(
                 top: -10,
@@ -2516,7 +3019,6 @@ class _MemberCard extends StatelessWidget {
                   onEnd: onEndPortDrag,
                 ),
               ),
-
             if (activePort == _LinkPort.childBottom)
               Positioned(
                 bottom: -10,
@@ -2529,7 +3031,6 @@ class _MemberCard extends StatelessWidget {
                   onEnd: onEndPortDrag,
                 ),
               ),
-
             if (activePort == _LinkPort.spouseLeft)
               Positioned(
                 left: -10,
@@ -2542,7 +3043,6 @@ class _MemberCard extends StatelessWidget {
                   onEnd: onEndPortDrag,
                 ),
               ),
-
             if (activePort == _LinkPort.spouseRight)
               Positioned(
                 right: -10,
@@ -2575,7 +3075,6 @@ class _PlusPort extends StatefulWidget {
   final void Function(Offset globalPos) onStart;
   final void Function(Offset globalPos) onUpdate;
   final void Function(Offset globalPos) onEnd;
-
   final VoidCallback? onTap;
 
   @override
@@ -2619,20 +3118,14 @@ class _PlusPortState extends State<_PlusPort> {
               widget.onStart(_downGlobal!);
             }
 
-            if (_started) {
-              widget.onUpdate(e.position);
-            }
+            if (_started) widget.onUpdate(e.position);
           },
           onPointerUp: (_) {
-            if (_started) {
-              widget.onEnd(_lastGlobal ?? Offset.zero);
-            }
+            if (_started) widget.onEnd(_lastGlobal ?? Offset.zero);
             _reset();
           },
           onPointerCancel: (_) {
-            if (_started) {
-              widget.onEnd(_lastGlobal ?? Offset.zero);
-            }
+            if (_started) widget.onEnd(_lastGlobal ?? Offset.zero);
             _reset();
           },
           child: Container(

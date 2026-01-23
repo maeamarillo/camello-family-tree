@@ -1,5 +1,12 @@
+import 'dart:io';
 import 'dart:math';
+import 'dart:typed_data';
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
+import 'package:flutter/services.dart';
+import 'package:image_picker/image_picker.dart';
+import 'package:photo_view/photo_view.dart';
+import 'package:flutter/foundation.dart' show kIsWeb;
 
 void main() => runApp(const DashboardPage());
 
@@ -21,74 +28,107 @@ class DashboardPage extends StatelessWidget {
   }
 }
 
-/// Roles shown on each card.
-enum Role { mother, father, child }
+enum Gender { female, male }
 
-extension RoleUi on Role {
+extension GenderUi on Gender {
   String get label => switch (this) {
-        Role.mother => 'Mother',
-        Role.father => 'Father',
-        Role.child => 'Child',
+        Gender.female => 'Female',
+        Gender.male => 'Male',
       };
 
   IconData get icon => switch (this) {
-        Role.mother => Icons.female,
-        Role.father => Icons.male,
-        Role.child => Icons.child_care,
+        Gender.female => Icons.female,
+        Gender.male => Icons.male,
+      };
+
+  Color get tone => switch (this) {
+        Gender.female => const Color(0xFFEAF3FF),
+        Gender.male => const Color(0xFFEFF8F1),
+      };
+
+  Gender get opposite => switch (this) {
+        Gender.female => Gender.male,
+        Gender.male => Gender.female,
       };
 }
 
-/// In-memory node model (bi-directional relationships).
+String _formatDate(DateTime d) {
+  const months = [
+    'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+    'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'
+  ];
+  final m = months[d.month - 1];
+  return '$m ${d.day}, ${d.year}';
+}
+
 class FamilyNode {
   FamilyNode({
     required this.id,
     required this.name,
-    required this.role,
+    required this.gender,
     required this.levelY,
     required this.slotX,
+    this.birthday,
+    this.photoPath,
+    this.photoBytes,
   });
 
   final int id;
   String name;
-  Role role;
+  Gender gender;
 
-  /// Parents/children stored as IDs for simplicity & stability.
   final Set<int> parents = {};
   final Set<int> children = {};
+  final Set<int> spouses = {};
 
-  /// ✅ Persistent layout metadata (NO global recompute).
-  /// levelY increases downward (parents above children can be negative)
   int levelY;
-
-  /// Stable horizontal "slot" (like a column)
   double slotX;
 
-  /// Optional manual offset: drag a node and it nudges from auto-layout.
   Offset manualOffset = Offset.zero;
+  DateTime? birthday;
+  String? photoPath;
+  Uint8List? photoBytes;
+
+  bool get hasPhoto => kIsWeb ? photoBytes != null : photoPath != null;
+
+  ImageProvider get photoProvider {
+    if (kIsWeb) {
+      return photoBytes != null
+          ? MemoryImage(photoBytes!)
+          : const AssetImage('assets/placeholder.png') as ImageProvider;
+    } else {
+      return photoPath != null && File(photoPath!).existsSync()
+          ? FileImage(File(photoPath!))
+          : const AssetImage('assets/placeholder.png') as ImageProvider;
+    }
+  }
 }
 
-/// Simple in-memory graph store + relationship helpers.
 class FamilyTreeStore extends ChangeNotifier {
   final Map<int, FamilyNode> _nodes = {};
   int _nextId = 1;
-
-  /// ✅ Track newest node so ONLY it "snaps" (others don't rearrange)
   int? lastAddedId;
 
   Map<int, FamilyNode> get nodes => _nodes;
 
   FamilyNode createNode({
     required String name,
-    required Role role,
+    required Gender gender,
     required int levelY,
     required double slotX,
+    DateTime? birthday,
+    String? photoPath,
+    Uint8List? photoBytes,
   }) {
     final node = FamilyNode(
       id: _nextId++,
       name: name,
-      role: role,
+      gender: gender,
       levelY: levelY,
       slotX: slotX,
+      birthday: birthday,
+      photoPath: photoPath,
+      photoBytes: photoBytes,
     );
     _nodes[node.id] = node;
     lastAddedId = node.id;
@@ -97,8 +137,33 @@ class FamilyTreeStore extends ChangeNotifier {
 
   FamilyNode getNode(int id) => _nodes[id]!;
 
-  /// Ensures parent<->child linkage is always bi-directional.
-  void linkParentChild({required int parentId, required int childId}) {
+  void setBirthday(int id, DateTime? date) {
+    if (!_nodes.containsKey(id)) return;
+    getNode(id).birthday = date;
+    notifyListeners();
+  }
+
+  void setPhoto(int id, String? photoPath, [Uint8List? photoBytes]) {
+    if (!_nodes.containsKey(id)) return;
+    final node = getNode(id);
+    node.photoPath = photoPath;
+    node.photoBytes = photoBytes;
+    notifyListeners();
+  }
+
+  void removePhoto(int id) {
+    if (!_nodes.containsKey(id)) return;
+    final node = getNode(id);
+    node.photoPath = null;
+    node.photoBytes = null;
+    notifyListeners();
+  }
+
+  void linkParentChild({
+    required int parentId,
+    required int childId,
+    bool notify = true,
+  }) {
     if (parentId == childId) return;
     if (!_nodes.containsKey(parentId) || !_nodes.containsKey(childId)) return;
 
@@ -108,29 +173,59 @@ class FamilyTreeStore extends ChangeNotifier {
     parent.children.add(childId);
     child.parents.add(parentId);
 
-    notifyListeners();
+    if (notify) notifyListeners();
+  }
+
+  void linkSpouses({required int aId, required int bId, bool notify = true}) {
+    if (aId == bId) return;
+    if (!_nodes.containsKey(aId) || !_nodes.containsKey(bId)) return;
+
+    final a = getNode(aId);
+    final b = getNode(bId);
+
+    a.spouses.add(bId);
+    b.spouses.add(aId);
+
+    if (notify) notifyListeners();
+  }
+
+  int? spouseOf(int personId) {
+    final n = getNode(personId);
+    if (n.spouses.isEmpty) return null;
+    return n.spouses.first;
   }
 
   void renameNode(int id, String newName) {
-    getNode(id).name = newName.trim().isEmpty ? getNode(id).name : newName.trim();
+    getNode(id).name =
+        newName.trim().isEmpty ? getNode(id).name : newName.trim();
     notifyListeners();
   }
 
-  /// Returns (motherId, fatherId) among THIS PERSON'S parents.
-  (int? motherId, int? fatherId) parentPairForPerson(int personId) {
-    int? mother;
-    int? father;
+  (int? femaleParentId, int? maleParentId) parentPairForPerson(int personId) {
+    int? femaleP;
+    int? maleP;
     final person = getNode(personId);
+
     for (final pid in person.parents) {
       final p = getNode(pid);
-      if (p.role == Role.mother) mother ??= pid;
-      if (p.role == Role.father) father ??= pid;
+      if (p.gender == Gender.female) femaleP ??= pid;
+      if (p.gender == Gender.male) maleP ??= pid;
     }
-    return (mother, father);
+    return (femaleP, maleP);
   }
 
-  /// Finds a co-parent for `from` (based on any shared existing child).
-  int? _findCoParent(int fromNodeId) {
+  bool hasCoParentViaChildren(int personId) {
+    final person = getNode(personId);
+    for (final childId in person.children) {
+      final child = getNode(childId);
+      for (final pid in child.parents) {
+        if (pid != personId) return true;
+      }
+    }
+    return false;
+  }
+
+  int? _findCoParentBySharedChild(int fromNodeId) {
     final from = getNode(fromNodeId);
     for (final existingChildId in from.children) {
       final existingChild = getNode(existingChildId);
@@ -141,112 +236,523 @@ class FamilyTreeStore extends ChangeNotifier {
     return null;
   }
 
-  /// ✅ Next slot for a new child:
-  /// append to the RIGHT of existing children so old nodes never shift.
-  double _nextChildSlot(int parentId) {
-    final parent = getNode(parentId);
-    if (parent.children.isEmpty) return parent.slotX;
-
-    double maxSlot = -double.infinity;
-    for (final cid in parent.children) {
-      maxSlot = max(maxSlot, getNode(cid).slotX);
-    }
-    return maxSlot + 1;
+  int? _findCoParentPreferSpouse(int fromNodeId) {
+    final sp = spouseOf(fromNodeId);
+    if (sp != null) return sp;
+    return _findCoParentBySharedChild(fromNodeId);
   }
 
-  /// ✅ Slot for a new parent:
-  /// if spouse exists, align as a pair (mother left, father right), else above person.
+  double _nearestFreeSlotAtLevel({
+    required int levelY,
+    required double anchorSlot,
+    required bool preferLeft,
+  }) {
+    final taken = <int>{};
+    for (final n in _nodes.values) {
+      if (n.levelY == levelY) taken.add(n.slotX.toInt());
+    }
+
+    final base = anchorSlot.round();
+
+    for (int d = 0; d < 500; d++) {
+      final left = base - d;
+      final right = base + d;
+
+      if (d == 0) {
+        if (!taken.contains(base)) return base.toDouble();
+        continue;
+      }
+
+      if (preferLeft) {
+        if (!taken.contains(left)) return left.toDouble();
+        if (!taken.contains(right)) return right.toDouble();
+      } else {
+        if (!taken.contains(right)) return right.toDouble();
+        if (!taken.contains(left)) return left.toDouble();
+      }
+    }
+
+    return (base + 1).toDouble();
+  }
+
+  double _nextChildSlotSmart(int fromNodeId) {
+    final from = getNode(fromNodeId);
+    final childLevel = from.levelY + 1;
+
+    final coparentId = _findCoParentPreferSpouse(fromNodeId);
+    if (coparentId == null) {
+      return _nearestFreeSlotAtLevel(
+        levelY: childLevel,
+        anchorSlot: from.slotX,
+        preferLeft: true,
+      );
+    }
+
+    final cp = getNode(coparentId);
+    final anchor = (from.slotX + cp.slotX) / 2;
+    final preferLeft = from.slotX <= cp.slotX;
+
+    return _nearestFreeSlotAtLevel(
+      levelY: childLevel,
+      anchorSlot: anchor,
+      preferLeft: preferLeft,
+    );
+  }
+
   double _newParentSlot({
     required int personId,
-    required Role parentRole,
+    required Gender newParentGender,
     required int? existingOtherParentId,
   }) {
     final person = getNode(personId);
-
-    if (existingOtherParentId == null) {
-      return person.slotX;
-    }
+    if (existingOtherParentId == null) return person.slotX;
 
     final other = getNode(existingOtherParentId);
 
-    if (parentRole == Role.mother) {
+    if (newParentGender == Gender.female) {
       return min(other.slotX, person.slotX) - 1;
     } else {
       return max(other.slotX, person.slotX) + 1;
     }
   }
 
-  /// Adds a parent to ANY person (works for child, mother, father).
-  /// Prevents duplicate mother/father for the same person.
+  void _linkNewParentToSharedChildren({
+    required int newParentId,
+    required Gender newParentGender,
+    required int otherParentId,
+  }) {
+    final otherParent = getNode(otherParentId);
+
+    for (final childId in otherParent.children) {
+      if (!_nodes.containsKey(childId)) continue;
+      final (femaleP, maleP) = parentPairForPerson(childId);
+
+      if (childId == newParentId) continue;
+      if (newParentGender == Gender.female && femaleP != null) continue;
+      if (newParentGender == Gender.male && maleP != null) continue;
+
+      linkParentChild(parentId: newParentId, childId: childId, notify: false);
+    }
+  }
+
+  static const int _minSlotGap = 1;
+
+  void _compactSlotsPerLevel() {
+    if (_nodes.isEmpty) return;
+
+    final byLevel = <int, List<int>>{};
+    for (final n in _nodes.values) {
+      byLevel.putIfAbsent(n.levelY, () => []).add(n.id);
+    }
+
+    for (final entry in byLevel.entries) {
+      final ids = entry.value;
+      ids.sort((a, b) => _nodes[a]!.slotX.compareTo(_nodes[b]!.slotX));
+
+      final taken = <int>{};
+      int? prevSlot;
+
+      for (final id in ids) {
+        final node = _nodes[id]!;
+        int target = node.slotX.toInt();
+
+        if (prevSlot != null) {
+          final minAllowed = prevSlot + _minSlotGap;
+          if (target < minAllowed) target = minAllowed;
+        }
+
+        while (taken.contains(target)) {
+          target += 1;
+        }
+
+        taken.add(target);
+        node.slotX = target.toDouble();
+        prevSlot = target;
+      }
+
+      ids.sort((a, b) => _nodes[a]!.slotX.compareTo(_nodes[b]!.slotX));
+      for (int i = ids.length - 2; i >= 0; i--) {
+        final left = _nodes[ids[i]]!;
+        final right = _nodes[ids[i + 1]]!;
+        final maxAllowed = right.slotX.toInt() - _minSlotGap;
+        final cur = left.slotX.toInt();
+        if (cur > maxAllowed) left.slotX = maxAllowed.toDouble();
+      }
+    }
+  }
+
+  void _anchorToRoot() {
+    if (_nodes.isEmpty) return;
+
+    FamilyNode anchor = _nodes.values.first;
+    for (final n in _nodes.values) {
+      if (n.levelY < anchor.levelY) {
+        anchor = n;
+      } else if (n.levelY == anchor.levelY && n.id < anchor.id) {
+        anchor = n;
+      }
+    }
+
+    final shift = anchor.slotX.toInt();
+    if (shift == 0) return;
+
+    for (final n in _nodes.values) {
+      n.slotX -= shift;
+    }
+  }
+
+  void _stabilizeLayout() {
+    _compactSlotsPerLevel();
+    _anchorToRoot();
+  }
+
+  void deleteNode(int id) {
+    if (!_nodes.containsKey(id)) return;
+
+    final node = getNode(id);
+
+    for (final pid in node.parents.toList()) {
+      _nodes[pid]?.children.remove(id);
+    }
+    for (final cid in node.children.toList()) {
+      _nodes[cid]?.parents.remove(id);
+    }
+    for (final sid in node.spouses.toList()) {
+      _nodes[sid]?.spouses.remove(id);
+    }
+
+    _nodes.remove(id);
+
+    if (lastAddedId == id) {
+      lastAddedId = _nodes.isEmpty ? null : _nodes.keys.reduce(max);
+    }
+
+    _stabilizeLayout();
+    notifyListeners();
+  }
+
+  FamilyNode addRoot({
+    required String name,
+    required Gender gender,
+    DateTime? birthday,
+    String? photoPath,
+    Uint8List? photoBytes,
+  }) {
+    final root = createNode(
+      name: name,
+      gender: gender,
+      levelY: 0,
+      slotX: 0,
+      birthday: birthday,
+      photoPath: photoPath,
+      photoBytes: photoBytes,
+    );
+    _stabilizeLayout();
+    notifyListeners();
+    return root;
+  }
+
+  FamilyNode addStandalone({
+    required String name,
+    required Gender gender,
+    DateTime? birthday,
+    String? photoPath,
+    Uint8List? photoBytes,
+  }) {
+    const level = 0;
+
+    double anchor = 0;
+    bool anyAtLevel = false;
+
+    for (final n in _nodes.values) {
+      if (n.levelY == level) {
+        anyAtLevel = true;
+        anchor = max(anchor, n.slotX);
+      }
+    }
+
+    final slot = _nearestFreeSlotAtLevel(
+      levelY: level,
+      anchorSlot: anyAtLevel ? (anchor + 1) : 0,
+      preferLeft: false,
+    );
+
+    final node = createNode(
+      name: name,
+      gender: gender,
+      levelY: level,
+      slotX: slot,
+      birthday: birthday,
+      photoPath: photoPath,
+      photoBytes: photoBytes,
+    );
+
+    _stabilizeLayout();
+    notifyListeners();
+    return node;
+  }
+
+  void _backfillSpouseAsCoParent({
+    required int personId,
+    required int spouseId,
+  }) {
+    final person = getNode(personId);
+    final spouse = getNode(spouseId);
+
+    for (final childId in person.children) {
+      final (femaleP, maleP) = parentPairForPerson(childId);
+      if (spouse.gender == Gender.female && femaleP == null) {
+        linkParentChild(parentId: spouseId, childId: childId, notify: false);
+      } else if (spouse.gender == Gender.male && maleP == null) {
+        linkParentChild(parentId: spouseId, childId: childId, notify: false);
+      }
+    }
+
+    for (final childId in spouse.children) {
+      final (femaleP, maleP) = parentPairForPerson(childId);
+      if (person.gender == Gender.female && femaleP == null) {
+        linkParentChild(parentId: personId, childId: childId, notify: false);
+      } else if (person.gender == Gender.male && maleP == null) {
+        linkParentChild(parentId: personId, childId: childId, notify: false);
+      }
+    }
+  }
+
+  FamilyNode? addSpouse({
+    required int personId,
+    required String name,
+    DateTime? birthday,
+    String? photoPath,
+    Uint8List? photoBytes,
+  }) {
+    final person = getNode(personId);
+    if (person.spouses.isNotEmpty) return null;
+
+    final spouseGender = person.gender.opposite;
+    final preferLeft = spouseGender == Gender.female;
+    final anchor = person.slotX + (preferLeft ? -1 : 1);
+
+    final slot = _nearestFreeSlotAtLevel(
+      levelY: person.levelY,
+      anchorSlot: anchor,
+      preferLeft: preferLeft,
+    );
+
+    final spouse = createNode(
+      name: name,
+      gender: spouseGender,
+      levelY: person.levelY,
+      slotX: slot,
+      birthday: birthday,
+      photoPath: photoPath,
+      photoBytes: photoBytes,
+    );
+
+    linkSpouses(aId: personId, bId: spouse.id, notify: false);
+    _backfillSpouseAsCoParent(personId: personId, spouseId: spouse.id);
+
+    _stabilizeLayout();
+    notifyListeners();
+    return spouse;
+  }
+
   FamilyNode? addParent({
     required int personId,
-    required Role parentRole,
+    required Gender parentGender,
     required String name,
+    DateTime? birthday,
+    String? photoPath,
+    Uint8List? photoBytes,
   }) {
-    if (parentRole == Role.child) return null;
-
-    final (motherId, fatherId) = parentPairForPerson(personId);
-    if (parentRole == Role.mother && motherId != null) return null;
-    if (parentRole == Role.father && fatherId != null) return null;
-
     final person = getNode(personId);
-    final otherParentId = parentRole == Role.mother ? fatherId : motherId;
+    if (person.parents.length >= 2) return null;
+
+    final (femaleP, maleP) = parentPairForPerson(personId);
+    if (parentGender == Gender.female && femaleP != null) return null;
+    if (parentGender == Gender.male && maleP != null) return null;
+
+    final otherParentId = parentGender == Gender.female ? maleP : femaleP;
 
     final parent = createNode(
       name: name,
-      role: parentRole,
-      levelY: person.levelY - 1, // can be negative
+      gender: parentGender,
+      levelY: person.levelY - 1,
       slotX: _newParentSlot(
         personId: personId,
-        parentRole: parentRole,
+        newParentGender: parentGender,
         existingOtherParentId: otherParentId,
       ),
+      birthday: birthday,
+      photoPath: photoPath,
+      photoBytes: photoBytes,
     );
 
-    linkParentChild(parentId: parent.id, childId: personId);
+    linkParentChild(parentId: parent.id, childId: personId, notify: false);
+
+    if (otherParentId != null) {
+      _linkNewParentToSharedChildren(
+        newParentId: parent.id,
+        newParentGender: parentGender,
+        otherParentId: otherParentId,
+      );
+    }
+
+    _stabilizeLayout();
+    notifyListeners();
     return parent;
   }
 
-  /// Adds a child from ANY node (even if node is Role.child), enabling infinite generations.
-  /// Auto-links the new child to BOTH parents if a co-parent exists.
   FamilyNode addChild({
     required int fromNodeId,
     required String name,
+    required Gender childGender,
+    DateTime? birthday,
+    String? photoPath,
+    Uint8List? photoBytes,
   }) {
     final from = getNode(fromNodeId);
+    final slot = _nextChildSlotSmart(fromNodeId);
 
     final child = createNode(
       name: name,
-      role: Role.child,
+      gender: childGender,
       levelY: from.levelY + 1,
-      slotX: _nextChildSlot(fromNodeId),
+      slotX: slot,
+      birthday: birthday,
+      photoPath: photoPath,
+      photoBytes: photoBytes,
     );
 
-    linkParentChild(parentId: from.id, childId: child.id);
+    linkParentChild(parentId: from.id, childId: child.id, notify: false);
 
-    final coparentId = _findCoParent(fromNodeId);
+    final coparentId = _findCoParentPreferSpouse(fromNodeId);
     if (coparentId != null) {
-      linkParentChild(parentId: coparentId, childId: child.id);
-
-      // Optional centering between parents (still stable; only affects the new child)
-      final cp = getNode(coparentId);
-      child.slotX = (from.slotX + cp.slotX) / 2;
-      notifyListeners();
+      linkParentChild(parentId: coparentId, childId: child.id, notify: false);
     }
 
+    _stabilizeLayout();
+    notifyListeners();
     return child;
   }
 
-  /// Nudges a node manually (used after dragging).
   void addManualOffset(int nodeId, Offset delta) {
     getNode(nodeId).manualOffset += delta;
     notifyListeners();
   }
+
+  void addManualOffsetBulk(Set<int> nodeIds, Offset delta) {
+    bool changed = false;
+    for (final id in nodeIds) {
+      final n = _nodes[id];
+      if (n == null) continue;
+      n.manualOffset += delta;
+      changed = true;
+    }
+    if (changed) notifyListeners();
+  }
+
+  void clearAll() {
+    _nodes.clear();
+    _nextId = 1;
+    lastAddedId = null;
+    notifyListeners();
+  }
+
+  bool tryLinkExistingParent({required int parentId, required int childId}) {
+    if (!_nodes.containsKey(parentId) || !_nodes.containsKey(childId)) return false;
+    if (parentId == childId) return false;
+
+    final parent = getNode(parentId);
+    final child = getNode(childId);
+
+    if (child.parents.length >= 2) return false;
+
+    final (femaleP, maleP) = parentPairForPerson(childId);
+    if (parent.gender == Gender.female && femaleP != null) return false;
+    if (parent.gender == Gender.male && maleP != null) return false;
+
+    linkParentChild(parentId: parentId, childId: childId, notify: false);
+
+    final coparentId = _findCoParentPreferSpouse(parentId);
+    if (coparentId != null && coparentId != parentId) {
+      final cp = getNode(coparentId);
+      final (f2, m2) = parentPairForPerson(childId);
+      final canAttach = (cp.gender == Gender.female && f2 == null) ||
+          (cp.gender == Gender.male && m2 == null);
+
+      if (canAttach && !child.parents.contains(coparentId)) {
+        linkParentChild(parentId: coparentId, childId: childId, notify: false);
+      }
+    }
+
+    child.levelY = parent.levelY + 1;
+    child.slotX = _nextChildSlotSmart(parentId);
+    child.manualOffset = Offset.zero;
+
+    _stabilizeLayout();
+    notifyListeners();
+    return true;
+  }
+
+  bool tryLinkExistingChild({required int parentId, required int childId}) {
+    if (!_nodes.containsKey(parentId) || !_nodes.containsKey(childId)) return false;
+    if (parentId == childId) return false;
+
+    final parent = getNode(parentId);
+    final child = getNode(childId);
+
+    if (child.parents.length >= 2) return false;
+
+    final (femaleP, maleP) = parentPairForPerson(childId);
+    if (parent.gender == Gender.female && femaleP != null) return false;
+    if (parent.gender == Gender.male && maleP != null) return false;
+
+    linkParentChild(parentId: parentId, childId: childId, notify: false);
+
+    final coparentId = _findCoParentPreferSpouse(parentId);
+    if (coparentId != null && coparentId != parentId) {
+      final cp = getNode(coparentId);
+      final (f2, m2) = parentPairForPerson(childId);
+      final canAttach = (cp.gender == Gender.female && f2 == null) ||
+          (cp.gender == Gender.male && m2 == null);
+
+      if (canAttach && !child.parents.contains(coparentId)) {
+        linkParentChild(parentId: coparentId, childId: childId, notify: false);
+      }
+    }
+
+    child.levelY = parent.levelY + 1;
+    child.slotX = _nextChildSlotSmart(parentId);
+    child.manualOffset = Offset.zero;
+
+    _stabilizeLayout();
+    notifyListeners();
+    return true;
+  }
+
+  bool tryLinkExistingSpouses({required int aId, required int bId}) {
+    if (!_nodes.containsKey(aId) || !_nodes.containsKey(bId)) return false;
+    if (aId == bId) return false;
+
+    final a = getNode(aId);
+    final b = getNode(bId);
+
+    if (a.spouses.isNotEmpty || b.spouses.isNotEmpty) return false;
+    if (a.gender == b.gender) return false;
+
+    if (hasCoParentViaChildren(aId) || hasCoParentViaChildren(bId)) return false;
+
+    linkSpouses(aId: aId, bId: bId, notify: false);
+
+    _backfillSpouseAsCoParent(personId: aId, spouseId: bId);
+    _backfillSpouseAsCoParent(personId: bId, spouseId: aId);
+
+    _stabilizeLayout();
+    notifyListeners();
+    return true;
+  }
 }
 
-/// ✅ Layout uses stored slotX + levelY.
-/// ✅ Only newest node is allowed to "snap" away from overlaps.
-/// ✅ Then we translate everything so no node has negative left/top (Stack can't show negatives).
 class FamilyTreeLayout {
   FamilyTreeLayout({
     required this.store,
@@ -268,50 +774,11 @@ class FamilyTreeLayout {
     final xStep = cardSize.width + hGap;
     final yStep = cardSize.height + vGap;
 
-    // 1) Base positions from stable slots.
     for (final n in nodes.values) {
       pos[n.id] = Offset(n.slotX * xStep, n.levelY * yStep);
     }
 
-    // 2) Overlap avoidance per level (ONLY shift the newest node).
-    final newest = store.lastAddedId;
-    final byLevel = <int, List<int>>{};
-    for (final n in nodes.values) {
-      byLevel.putIfAbsent(n.levelY, () => []).add(n.id);
-    }
-
-    for (final entry in byLevel.entries) {
-      final ids = entry.value..sort((a, b) => pos[a]!.dx.compareTo(pos[b]!.dx));
-
-      for (int i = 1; i < ids.length; i++) {
-        final a = ids[i - 1];
-        final b = ids[i];
-
-        final pa = pos[a]!;
-        final pb = pos[b]!;
-        final minX = pa.dx + cardSize.width + hGap * 0.6;
-
-        if (pb.dx < minX) {
-          // ✅ Do not move old nodes.
-          if (newest == b) {
-            pos[b] = Offset(minX, pb.dy);
-          } else if (newest == a) {
-            // simplest: also move newest right if it's the left one
-            pos[a] = Offset(pa.dx + (minX - pb.dx), pa.dy);
-          } else {
-            // neither is newest -> do nothing
-          }
-        }
-      }
-    }
-
-    // 3) Apply manual offsets (drag nudges).
-    for (final n in nodes.values) {
-      pos[n.id] = pos[n.id]! + n.manualOffset;
-    }
-
-    // 4) ✅ Translate so nothing is negative (Stack can't display negative left/top).
-    const double pad = 400; // Increased from 200 for better margin
+    const double pad = 400;
     double minX = double.infinity, minY = double.infinity;
     for (final p in pos.values) {
       minX = min(minX, p.dx);
@@ -327,6 +794,10 @@ class FamilyTreeLayout {
       }
     }
 
+    for (final n in nodes.values) {
+      pos[n.id] = pos[n.id]! + n.manualOffset;
+    }
+
     return pos;
   }
 }
@@ -338,260 +809,559 @@ class FamilyTreePage extends StatefulWidget {
   State<FamilyTreePage> createState() => _FamilyTreePageState();
 }
 
+enum _LinkPort { parentTop, childBottom, spouseLeft, spouseRight }
+
+Widget _buildMemberPhoto(FamilyNode node) {
+  return ClipRRect(
+    borderRadius: BorderRadius.circular(12),
+    child: Container(
+      width: 42,
+      height: 42,
+      color: !node.hasPhoto ? node.gender.tone : null,
+      child: !node.hasPhoto
+          ? Icon(node.gender.icon, color: Colors.black87)
+          : Image(
+              image: node.photoProvider,
+              fit: BoxFit.cover,
+              errorBuilder: (context, error, stackTrace) {
+                return Container(
+                  color: node.gender.tone,
+                  child: Icon(
+                    node.gender.icon,
+                    color: Colors.black87,
+                  ),
+                );
+              },
+            ),
+    ),
+  );
+}
+
 class _FamilyTreePageState extends State<FamilyTreePage> {
   late final FamilyTreeStore store;
 
-  static const Size cardSize = Size(170, 72);
+  static const Size cardSize = Size(170, 84);
   static const double hGap = 40;
   static const double vGap = 70;
+  static const double virtualSize = 100000;
 
   final TransformationController _tc = TransformationController();
+  bool _didInitialCenter = false;
+
+  static const double _minZoom = 0.3;
+  static const double _maxZoom = 3.0;
+
+  double _zoomValue = 1.0;
+  bool _syncingFromController = false;
+
+  bool _isLinking = false;
+  int? _linkFromNodeId;
+  _LinkPort? _linkPort;
+  Offset _linkStartScene = Offset.zero;
+  Offset _linkCurrentViewport = Offset.zero;
+
+  int? _hoverTargetId;
+  Offset _snappedEndViewport = Offset.zero;
+
+  static const double _snapRadius = 70.0;
+
+  int? _hoveredNodeId;
+  Map<int, Offset> _lastLayoutScene = {};
+
+  final Set<int> _ctrlSelectedIds = <int>{};
+
+  final ImagePicker _imagePicker = ImagePicker();
+
+  // ✅ NEW: controller for the horizontal options list so last item won't get clipped
+  final ScrollController _actionsCtrl = ScrollController();
+
+  bool get _ctrlPressed {
+    final kb = HardwareKeyboard.instance;
+    return kb.isLogicalKeyPressed(LogicalKeyboardKey.controlLeft) ||
+        kb.isLogicalKeyPressed(LogicalKeyboardKey.controlRight);
+  }
+
+  void _toggleCtrlSelect(int id) {
+    setState(() {
+      if (_ctrlSelectedIds.contains(id)) {
+        _ctrlSelectedIds.remove(id);
+      } else {
+        _ctrlSelectedIds.add(id);
+      }
+    });
+  }
+
+  void _clearCtrlSelection() {
+    if (_ctrlSelectedIds.isEmpty) return;
+    setState(() => _ctrlSelectedIds.clear());
+  }
+
+  Future<Uint8List?> _getImageBytes(XFile file) async {
+    try {
+      return await file.readAsBytes();
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Failed to read image: $e')),
+        );
+      }
+      return null;
+    }
+  }
+
+  Future<Uint8List?> _pickImageFromGallery() async {
+    try {
+      final XFile? image = await _imagePicker.pickImage(
+        source: ImageSource.gallery,
+        maxWidth: 800,
+        maxHeight: 800,
+        imageQuality: 85,
+      );
+      if (image == null) return null;
+      return await _getImageBytes(image);
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Failed to pick image: $e')),
+        );
+      }
+      return null;
+    }
+  }
+
+  Future<Uint8List?> _takePhotoWithCamera() async {
+    try {
+      final XFile? image = await _imagePicker.pickImage(
+        source: ImageSource.camera,
+        maxWidth: 800,
+        maxHeight: 800,
+        imageQuality: 85,
+      );
+      if (image == null) return null;
+      return await _getImageBytes(image);
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Failed to take photo: $e')),
+        );
+      }
+      return null;
+    }
+  }
+
+  Future<String?> _showPhotoSourceDialog(BuildContext context) async {
+    return await showDialog<String>(
+      context: context,
+      builder: (BuildContext context) {
+        return AlertDialog(
+          title: const Text('Add Photo'),
+          content: const Text('Choose photo source'),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context, 'gallery'),
+              child: const Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(Icons.photo_library),
+                  SizedBox(width: 8),
+                  Text('Gallery'),
+                ],
+              ),
+            ),
+            TextButton(
+              onPressed: () => Navigator.pop(context, 'camera'),
+              child: const Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(Icons.camera_alt),
+                  SizedBox(width: 8),
+                  Text('Camera'),
+                ],
+              ),
+            ),
+            TextButton(
+              onPressed: () => Navigator.pop(context, 'remove'),
+              child: const Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(Icons.delete),
+                  SizedBox(width: 8),
+                  Text('Remove Photo'),
+                ],
+              ),
+            ),
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('Cancel'),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  Future<void> _handlePhotoAction(int nodeId) async {
+    final source = await _showPhotoSourceDialog(context);
+    if (source == null) return;
+
+    if (source == 'remove') {
+      store.removePhoto(nodeId);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Photo removed')),
+        );
+      }
+      return;
+    }
+
+    Uint8List? photoBytes;
+    if (source == 'gallery') {
+      photoBytes = await _pickImageFromGallery();
+    } else if (source == 'camera') {
+      photoBytes = await _takePhotoWithCamera();
+    }
+
+    if (photoBytes != null) {
+      store.setPhoto(nodeId, null, photoBytes);
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Photo updated')),
+        );
+      }
+    }
+  }
+
+  void _viewPhotoFullScreen(FamilyNode node) {
+    if (!node.hasPhoto) return;
+
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (context) => Scaffold(
+          appBar: AppBar(
+            title: const Text('Photo'),
+            actions: [
+              IconButton(
+                icon: const Icon(Icons.close),
+                onPressed: () => Navigator.pop(context),
+              ),
+            ],
+          ),
+          body: PhotoView(
+            imageProvider: node.photoProvider,
+            backgroundDecoration: const BoxDecoration(color: Colors.black),
+            minScale: PhotoViewComputedScale.contained,
+            maxScale: PhotoViewComputedScale.covered * 2,
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildPhotoPreview(FamilyNode node) {
+    return GestureDetector(
+      onTap: node.hasPhoto ? () => _viewPhotoFullScreen(node) : null,
+      child: Container(
+        width: 50,
+        height: 50,
+        decoration: BoxDecoration(
+          shape: BoxShape.circle,
+          color: !node.hasPhoto ? node.gender.tone : null,
+          border: Border.all(color: Colors.grey.shade300, width: 1),
+        ),
+        child: !node.hasPhoto
+            ? Icon(node.gender.icon, size: 24, color: Colors.grey.shade700)
+            : ClipOval(
+                child: Image(
+                  image: node.photoProvider,
+                  fit: BoxFit.cover,
+                  errorBuilder: (context, error, stackTrace) {
+                    return Container(
+                      color: node.gender.tone,
+                      child: Icon(
+                        node.gender.icon,
+                        size: 24,
+                        color: Colors.grey.shade700,
+                      ),
+                    );
+                  },
+                ),
+              ),
+      ),
+    );
+  }
 
   @override
   void initState() {
     super.initState();
     store = FamilyTreeStore();
 
-    // Seed node (stable starting slot/level)
-    store.createNode(name: 'Alex', role: Role.child, levelY: 0, slotX: 0);
+    _tc.addListener(() {
+      if (!mounted) return;
+      if (_syncingFromController) return;
+
+      final s = _tc.value.getMaxScaleOnAxis().clamp(_minZoom, _maxZoom);
+      if ((s - _zoomValue).abs() > 0.005) {
+        setState(() => _zoomValue = s);
+      }
+    });
   }
 
   @override
   void dispose() {
     store.dispose();
     _tc.dispose();
+    _actionsCtrl.dispose(); // ✅ NEW
     super.dispose();
   }
 
-  @override
-  Widget build(BuildContext context) {
-    return AnimatedBuilder(
-      animation: store,
-      builder: (context, _) {
-        final layout = FamilyTreeLayout(
-          store: store,
-          cardSize: cardSize,
-          hGap: hGap,
-          vGap: vGap,
-        ).compute();
-
-        final bounds = _computeBounds(layout);
-        
-        // Calculate canvas size with generous padding that grows with the tree
-        const double horizontalPadding = 1000; // Increased padding
-        const double verticalPadding = 1000;
-        
-        final canvasSize = Size(
-          max(MediaQuery.of(context).size.width * 2, bounds.width + horizontalPadding),
-          max(MediaQuery.of(context).size.height * 2, bounds.height + verticalPadding),
-        );
-
-        return Scaffold(
-          appBar: AppBar(
-            title: const Text('Family Tree Builder'),
-            actions: [
-              IconButton(
-                tooltip: 'Reset view',
-                onPressed: () => _tc.value = Matrix4.identity(),
-                icon: const Icon(Icons.center_focus_strong),
-              ),
-              IconButton(
-                tooltip: 'Fit to screen',
-                onPressed: () => _fitToScreen(bounds),
-                icon: const Icon(Icons.fit_screen),
-              ),
-            ],
-          ),
-          body: InteractiveViewer(
-            transformationController: _tc,
-            minScale: 0.05, // Reduced for better zoom out
-            maxScale: 5.0, // Increased for better zoom in
-            constrained: false, // Allows canvas to be larger than viewport
-            boundaryMargin: const EdgeInsets.all(1000), // Increased margin
-            child: SizedBox(
-              width: canvasSize.width,
-              height: canvasSize.height,
-              child: Stack(
-                children: [
-                  CustomPaint(
-                    size: canvasSize,
-                    painter: _ConnectorPainter(
-                      store: store,
-                      positions: layout,
-                      cardSize: cardSize,
-                    ),
-                  ),
-                  for (final entry in layout.entries)
-                    _AnimatedNode(
-                      node: store.getNode(entry.key),
-                      topLeft: entry.value,
-                      size: cardSize,
-                      onTap: () => _openNodeActions(context, entry.key),
-                      onDragDelta: (delta) => store.addManualOffset(entry.key, delta),
-                    ),
-                ],
-              ),
-            ),
-          ),
-        );
-      },
-    );
-  }
-
-  Rect _computeBounds(Map<int, Offset> pos) {
-    if (pos.isEmpty) return const Rect.fromLTWH(0, 0, 800, 600);
-    
-    double minX = double.infinity;
-    double minY = double.infinity;
-    double maxX = -double.infinity;
-    double maxY = -double.infinity;
-
-    for (final p in pos.values) {
-      minX = min(minX, p.dx);
-      minY = min(minY, p.dy);
-      maxX = max(maxX, p.dx + cardSize.width);
-      maxY = max(maxY, p.dy + cardSize.height);
-    }
-    
-    // Add extra margin around the bounds
-    const double margin = 300;
-    return Rect.fromLTRB(
-      minX - margin,
-      minY - margin,
-      maxX + margin,
-      maxY + margin,
-    );
-  }
-
-  void _fitToScreen(Rect bounds) {
+  void _setZoom(double newZoom) {
     final screenSize = MediaQuery.of(context).size;
-    final scale = min(
-      screenSize.width / bounds.width,
-      screenSize.height / bounds.height,
-    ) * 0.8; // 80% of screen to leave some padding
-    
+    final viewportCenter = Offset(screenSize.width / 2, screenSize.height / 2);
+    final sceneCenter = _tc.toScene(viewportCenter);
+
+    _syncingFromController = true;
     _tc.value = Matrix4.identity()
-      ..translate(screenSize.width / 2, screenSize.height / 2)
-      ..scale(scale)
-      ..translate(-bounds.center.dx, -bounds.center.dy);
+      ..translate(viewportCenter.dx, viewportCenter.dy)
+      ..scale(newZoom)
+      ..translate(-sceneCenter.dx, -sceneCenter.dy);
+    _syncingFromController = false;
+
+    setState(() => _zoomValue = newZoom);
   }
 
-  Future<void> _openNodeActions(BuildContext context, int nodeId) async {
-    final node = store.getNode(nodeId);
-
-    await showModalBottomSheet(
-      context: context,
-      showDragHandle: true,
-      backgroundColor: Colors.white,
-      builder: (ctx) {
-        return SafeArea(
-          child: Padding(
-            padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Row(
-                  children: [
-                    Icon(node.role.icon),
-                    const SizedBox(width: 10),
-                    Expanded(
-                      child: Text(
-                        node.name,
-                        style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w600),
-                      ),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 12),
-                ListTile(
-                  leading: const Icon(Icons.edit),
-                  title: const Text('Edit Name'),
-                  onTap: () async {
-                    Navigator.pop(ctx);
-                    final name = await _promptText(context, title: 'Edit Name', initial: node.name);
-                    if (name != null) store.renameNode(nodeId, name);
-                  },
-                ),
-                ListTile(
-                  leading: const Icon(Icons.arrow_upward),
-                  title: const Text('Add Parent'),
-                  onTap: () async {
-                    Navigator.pop(ctx);
-                    await _addParentFlow(context, personId: nodeId);
-                  },
-                ),
-                ListTile(
-                  leading: const Icon(Icons.arrow_downward),
-                  title: const Text('Add Child'),
-                  onTap: () async {
-                    Navigator.pop(ctx);
-                    final name = await _promptText(context, title: 'Child Name', initial: 'New child');
-                    if (name == null) return;
-                    store.addChild(fromNodeId: nodeId, name: name);
-                  },
-                ),
-              ],
-            ),
-          ),
-        );
-      },
-    );
+  Offset _sceneToViewport(Offset scenePoint) {
+    final o = MatrixUtils.transformPoint(_tc.value, scenePoint);
+    return Offset(o.dx, o.dy);
   }
 
-  Future<void> _addParentFlow(BuildContext context, {required int personId}) async {
-    final person = store.getNode(personId);
-    final (motherId, fatherId) = store.parentPairForPerson(personId);
+  Offset _globalToViewport(Offset global) {
+    final box = context.findRenderObject() as RenderBox?;
+    if (box == null) return Offset.zero;
+    return box.globalToLocal(global);
+  }
 
-    final options = <Role>[
-      if (motherId == null) Role.mother,
-      if (fatherId == null) Role.father,
-    ];
+  double _distancePointToRect(Offset p, Rect r) {
+    final dx = (p.dx < r.left)
+        ? (r.left - p.dx)
+        : (p.dx > r.right)
+            ? (p.dx - r.right)
+            : 0.0;
 
-    if (options.isEmpty) {
+    final dy = (p.dy < r.top)
+        ? (r.top - p.dy)
+        : (p.dy > r.bottom)
+            ? (p.dy - r.bottom)
+            : 0.0;
+
+    return sqrt(dx * dx + dy * dy);
+  }
+
+  Offset _nearestPointOnRect(Offset p, Rect r) {
+    final x = p.dx.clamp(r.left, r.right);
+    final y = p.dy.clamp(r.top, r.bottom);
+    return Offset(x, y);
+  }
+
+  int? _nearestNodeInViewport(Offset viewportPoint, {int? excludeId}) {
+    int? bestId;
+    double bestDist = double.infinity;
+
+    for (final e in _lastLayoutScene.entries) {
+      if (excludeId != null && e.key == excludeId) continue;
+
+      final rectScene = Rect.fromLTWH(
+        e.value.dx,
+        e.value.dy,
+        cardSize.width,
+        cardSize.height,
+      );
+
+      final tl = _sceneToViewport(rectScene.topLeft);
+      final br = _sceneToViewport(rectScene.bottomRight);
+      final rectVp = Rect.fromPoints(tl, br);
+
+      final d = _distancePointToRect(viewportPoint, rectVp);
+      if (d < bestDist) {
+        bestDist = d;
+        bestId = e.key;
+      }
+    }
+
+    if (bestId == null) return null;
+    return (bestDist <= _snapRadius) ? bestId : null;
+  }
+
+  void _startLink({
+    required int fromNodeId,
+    required _LinkPort port,
+    required Offset startScene,
+    required Offset startViewport,
+  }) {
+    setState(() {
+      _isLinking = true;
+      _linkFromNodeId = fromNodeId;
+      _linkPort = port;
+      _linkStartScene = startScene;
+      _linkCurrentViewport = startViewport;
+      _hoverTargetId = null;
+      _snappedEndViewport = startViewport;
+      _hoveredNodeId = fromNodeId;
+    });
+
+    _updateLink(startViewport);
+  }
+
+  void _updateLink(Offset viewportPoint) {
+    if (!_isLinking) return;
+    final fromId = _linkFromNodeId;
+    if (fromId == null) return;
+
+    final targetId = _nearestNodeInViewport(viewportPoint, excludeId: fromId);
+    Offset snapped = viewportPoint;
+
+    if (targetId != null) {
+      final topLeftScene = _lastLayoutScene[targetId]!;
+      final rectScene = Rect.fromLTWH(
+        topLeftScene.dx,
+        topLeftScene.dy,
+        cardSize.width,
+        cardSize.height,
+      );
+
+      final tl = _sceneToViewport(rectScene.topLeft);
+      final br = _sceneToViewport(rectScene.bottomRight);
+      final rectVp = Rect.fromPoints(tl, br);
+
+      snapped = _nearestPointOnRect(viewportPoint, rectVp);
+    }
+
+    setState(() {
+      _linkCurrentViewport = viewportPoint;
+      _hoverTargetId = targetId;
+      _snappedEndViewport = snapped;
+    });
+  }
+
+  void _endLink(Offset viewportPoint) {
+    if (!_isLinking) return;
+
+    final fromId = _linkFromNodeId;
+    final port = _linkPort;
+    final targetId = _hoverTargetId;
+
+    setState(() {
+      _isLinking = false;
+      _linkFromNodeId = null;
+      _linkPort = null;
+      _hoverTargetId = null;
+    });
+
+    if (fromId == null || port == null) return;
+    if (targetId == null) return;
+
+    bool ok = false;
+
+    switch (port) {
+      case _LinkPort.parentTop:
+        ok = store.tryLinkExistingParent(parentId: targetId, childId: fromId);
+        break;
+      case _LinkPort.childBottom:
+        ok = store.tryLinkExistingChild(parentId: fromId, childId: targetId);
+        break;
+      case _LinkPort.spouseLeft:
+      case _LinkPort.spouseRight:
+        ok = store.tryLinkExistingSpouses(aId: fromId, bId: targetId);
+        break;
+    }
+
+    if (!ok) {
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('${person.name} already has a Mother and a Father.')),
+        const SnackBar(content: Text('Cannot connect these tiles (rules blocked).')),
+      );
+    }
+  }
+
+  Future<void> _handlePortTap(int nodeId, _LinkPort port) async {
+    if (_isLinking) return;
+
+    if (_ctrlSelectedIds.isNotEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Selection active. Ctrl+Click tiles to unselect first.')),
       );
       return;
     }
 
-    final chosen = await showModalBottomSheet<Role>(
-      context: context,
-      showDragHandle: true,
-      builder: (ctx) {
-        return SafeArea(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              const SizedBox(height: 6),
-              const Text('Select Parent Role', style: TextStyle(fontWeight: FontWeight.w600)),
-              const SizedBox(height: 8),
-              for (final r in options)
-                ListTile(
-                  leading: Icon(r.icon),
-                  title: Text(r.label),
-                  onTap: () => Navigator.pop(ctx, r),
-                ),
-              const SizedBox(height: 12),
-            ],
-          ),
-        );
-      },
-    );
-
-    if (chosen == null) return;
-
-    final name = await _promptText(context, title: '${chosen.label} Name', initial: 'New ${chosen.label}');
-    if (name == null) return;
-
-    final added = store.addParent(personId: personId, parentRole: chosen, name: name);
-    if (added == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Could not add ${chosen.label} (already exists).')),
-      );
+    switch (port) {
+      case _LinkPort.parentTop:
+        await _addParentFlow(context, personId: nodeId);
+        break;
+      case _LinkPort.childBottom:
+        await _addChildFlow(context, fromNodeId: nodeId);
+        break;
+      case _LinkPort.spouseLeft:
+      case _LinkPort.spouseRight:
+        await _addSpouseFlow(context, personId: nodeId);
+        break;
     }
   }
 
-  Future<String?> _promptText(BuildContext context, {required String title, required String initial}) async {
+  Future<void> _logout() async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Log out?'),
+        content: const Text('This will clear the current family tree.'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Log out'),
+          ),
+        ],
+      ),
+    );
+
+    if (ok != true) return;
+
+    store.clearAll();
+    _didInitialCenter = false;
+    _clearCtrlSelection();
+
+    _syncingFromController = true;
+    _tc.value = Matrix4.identity();
+    _syncingFromController = false;
+    setState(() => _zoomValue = 1.0);
+  }
+
+  Future<DateTime?> _pickBirthday(BuildContext context, {DateTime? initial}) async {
+    final now = DateTime.now();
+    final firstDate = DateTime(1900, 1, 1);
+    final lastDate = DateTime(now.year, now.month, now.day);
+
+    final init = initial ?? DateTime(1990, 1, 1);
+    final clampedInit = init.isBefore(firstDate)
+        ? firstDate
+        : (init.isAfter(lastDate) ? lastDate : init);
+
+    return showDatePicker(
+      context: context,
+      initialDate: clampedInit,
+      firstDate: firstDate,
+      lastDate: lastDate,
+      helpText: 'Select birthday (or cancel to skip)',
+    );
+  }
+
+  Future<String?> _promptText(
+    BuildContext context, {
+    required String title,
+    required String initial,
+  }) async {
     final c = TextEditingController(text: initial);
 
     return showDialog<String>(
@@ -609,11 +1379,911 @@ class _FamilyTreePageState extends State<FamilyTreePage> {
             onSubmitted: (_) => Navigator.pop(ctx, c.text),
           ),
           actions: [
-            TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
-            FilledButton(onPressed: () => Navigator.pop(ctx, c.text), child: const Text('Save')),
+            TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: const Text('Cancel'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.pop(ctx, c.text),
+              child: const Text('Save'),
+            ),
           ],
         );
       },
+    );
+  }
+
+  Future<Gender?> _selectGender(BuildContext context) async {
+    return await showModalBottomSheet<Gender>(
+      context: context,
+      showDragHandle: true,
+      builder: (ctx) {
+        return SafeArea(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const SizedBox(height: 6),
+              const Text('Select Gender', style: TextStyle(fontWeight: FontWeight.w600)),
+              const SizedBox(height: 8),
+              for (final g in const [Gender.female, Gender.male])
+                ListTile(
+                  leading: Icon(g.icon),
+                  title: Text(g.label),
+                  onTap: () => Navigator.pop(ctx, g),
+                ),
+              const SizedBox(height: 12),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  Future<Uint8List?> _addPhotoFlow(BuildContext context) async {
+    final source = await showDialog<String>(
+      context: context,
+      builder: (BuildContext context) {
+        return AlertDialog(
+          title: const Text('Add Photo (Optional)'),
+          content: const Text('Would you like to add a photo for this member?'),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context, 'gallery'),
+              child: const Text('Gallery'),
+            ),
+            TextButton(
+              onPressed: () => Navigator.pop(context, 'camera'),
+              child: const Text('Camera'),
+            ),
+            TextButton(
+              onPressed: () => Navigator.pop(context, 'skip'),
+              child: const Text('Skip'),
+            ),
+          ],
+        );
+      },
+    );
+
+    if (source == 'skip') return null;
+
+    if (source == 'gallery') {
+      return await _pickImageFromGallery();
+    } else if (source == 'camera') {
+      return await _takePhotoWithCamera();
+    }
+
+    return null;
+  }
+
+  Future<void> _addFirstMemberFlow(BuildContext context) async {
+    final name = await _promptText(
+      context,
+      title: 'First Member Name',
+      initial: 'New Member',
+    );
+    if (name == null) return;
+
+    final chosen = await _selectGender(context);
+    if (chosen == null) return;
+
+    final birthday = await _pickBirthday(context, initial: null);
+
+    final photoBytes = await _addPhotoFlow(context);
+
+    store.addRoot(
+      name: name,
+      gender: chosen,
+      birthday: birthday,
+      photoBytes: photoBytes,
+    );
+  }
+
+  Future<void> _addStandaloneMemberFlow(BuildContext context) async {
+    final name = await _promptText(
+      context,
+      title: 'Member Name',
+      initial: 'New Member',
+    );
+    if (name == null) return;
+
+    final chosen = await _selectGender(context);
+    if (chosen == null) return;
+
+    final birthday = await _pickBirthday(context, initial: null);
+
+    final photoBytes = await _addPhotoFlow(context);
+
+    store.addStandalone(
+      name: name,
+      gender: chosen,
+      birthday: birthday,
+      photoBytes: photoBytes,
+    );
+  }
+
+  Future<void> _openNodeActions(BuildContext context, int nodeId) async {
+    if (_ctrlSelectedIds.isNotEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Selection active. Ctrl+Click tiles to unselect first.')),
+      );
+      return;
+    }
+
+    final node = store.getNode(nodeId);
+
+    await showModalBottomSheet(
+      context: context,
+      backgroundColor: Colors.transparent,
+      enableDrag: true,
+      isScrollControlled: false,
+      builder: (ctx) {
+        return Container(
+          margin: const EdgeInsets.all(16),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.end,
+            children: [
+              Align(
+                alignment: Alignment.topRight,
+                child: GestureDetector(
+                  onTap: () => Navigator.pop(ctx),
+                  child: Container(
+                    width: 40,
+                    height: 40,
+                    decoration: BoxDecoration(
+                      color: Colors.white,
+                      shape: BoxShape.circle,
+                      boxShadow: [
+                        BoxShadow(
+                          color: Colors.black.withOpacity(0.1),
+                          blurRadius: 8,
+                          offset: const Offset(0, 2),
+                        ),
+                      ],
+                    ),
+                    child: const Icon(Icons.close, color: Colors.black54),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 12),
+
+              Container(
+                padding: const EdgeInsets.all(16),
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  borderRadius: BorderRadius.circular(24),
+                  boxShadow: [
+                    BoxShadow(
+                      color: Colors.black.withOpacity(0.1),
+                      blurRadius: 16,
+                      offset: const Offset(0, 4),
+                    ),
+                  ],
+                ),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Padding(
+                      padding: const EdgeInsets.only(bottom: 16),
+                      child: Row(
+                        children: [
+                          _buildPhotoPreview(node),
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  node.name,
+                                  style: const TextStyle(
+                                    fontSize: 16,
+                                    fontWeight: FontWeight.w600,
+                                  ),
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                                const SizedBox(height: 4),
+                                Row(
+                                  children: [
+                                    Icon(node.gender.icon, size: 14, color: Colors.grey.shade600),
+                                    const SizedBox(width: 4),
+                                    Text(
+                                      node.gender.label,
+                                      style: TextStyle(
+                                        color: Colors.grey.shade600,
+                                        fontSize: 12,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ],
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+
+                    // ✅ FIXED: Increased height and adjusted tile width to prevent text overflow
+                    SizedBox(
+                      height: 120, // Increased from 100 to 120
+                      child: Scrollbar(
+                        controller: _actionsCtrl,
+                        thumbVisibility: true,
+                        child: ListView(
+                          controller: _actionsCtrl,
+                          scrollDirection: Axis.horizontal,
+                          shrinkWrap: true,
+                          physics: const BouncingScrollPhysics(),
+                          padding: const EdgeInsets.only(left: 4, right: 20),
+                          children: [
+                            _HorizontalActionTile(
+                              icon: Icons.photo,
+                              title: 'Photo',
+                              subtitle: node.hasPhoto ? 'Edit' : 'Add',
+                              color: Colors.blue,
+                              onTap: () async {
+                                Navigator.pop(ctx);
+                                await _handlePhotoAction(nodeId);
+                              },
+                            ),
+                            if (node.hasPhoto)
+                              _HorizontalActionTile(
+                                icon: Icons.visibility,
+                                title: 'View',
+                                subtitle: 'Photo',
+                                color: Colors.blue,
+                                onTap: () {
+                                  Navigator.pop(ctx);
+                                  _viewPhotoFullScreen(node);
+                                },
+                              ),
+                            _HorizontalActionTile(
+                              icon: Icons.edit,
+                              title: 'Edit',
+                              subtitle: 'Name',
+                              color: Colors.green,
+                              onTap: () async {
+                                Navigator.pop(ctx);
+                                final name = await _promptText(
+                                  context,
+                                  title: 'Edit Name',
+                                  initial: node.name,
+                                );
+                                if (name != null) store.renameNode(nodeId, name);
+                              },
+                            ),
+                            _HorizontalActionTile(
+                              icon: Icons.cake,
+                              title: 'Birthday',
+                              subtitle: node.birthday == null
+                                  ? 'Set'
+                                  : _formatDate(node.birthday!),
+                              color: Colors.orange,
+                              onTap: () async {
+                                Navigator.pop(ctx);
+                                final picked = await _pickBirthday(
+                                  context,
+                                  initial: node.birthday,
+                                );
+                                if (picked != null) store.setBirthday(nodeId, picked);
+                              },
+                            ),
+                            _HorizontalActionTile(
+                              icon: Icons.favorite,
+                              title: 'Add',
+                              subtitle: 'Spouse',
+                              color: Colors.pink,
+                              enabled: node.spouses.isEmpty,
+                              onTap: () async {
+                                Navigator.pop(ctx);
+                                await _addSpouseFlow(context, personId: nodeId);
+                              },
+                            ),
+                            _HorizontalActionTile(
+                              icon: Icons.arrow_upward,
+                              title: 'Add',
+                              subtitle: 'Parent',
+                              color: Colors.purple,
+                              enabled: node.parents.length < 2,
+                              onTap: () async {
+                                Navigator.pop(ctx);
+                                await _addParentFlow(context, personId: nodeId);
+                              },
+                            ),
+                            _HorizontalActionTile(
+                              icon: Icons.arrow_downward,
+                              title: 'Add',
+                              subtitle: 'Child',
+                              color: Colors.teal,
+                              onTap: () async {
+                                Navigator.pop(ctx);
+                                await _addChildFlow(context, fromNodeId: nodeId);
+                              },
+                            ),
+                            _HorizontalActionTile(
+                              icon: Icons.delete,
+                              title: 'Delete',
+                              subtitle: 'Member',
+                              color: Colors.red,
+                              onTap: () async {
+                                Navigator.pop(ctx);
+                                final ok = await showDialog<bool>(
+                                  context: context,
+                                  builder: (dctx) => AlertDialog(
+                                    title: const Text('Delete member?'),
+                                    content: const Text(
+                                      'This will remove the member and all related links.',
+                                    ),
+                                    actions: [
+                                      TextButton(
+                                        onPressed: () => Navigator.pop(dctx, false),
+                                        child: const Text('Cancel'),
+                                      ),
+                                      FilledButton(
+                                        style: FilledButton.styleFrom(
+                                          backgroundColor: Colors.redAccent,
+                                        ),
+                                        onPressed: () => Navigator.pop(dctx, true),
+                                        child: const Text('Delete'),
+                                      ),
+                                    ],
+                                  ),
+                                );
+                                if (ok != true) return;
+                                store.deleteNode(nodeId);
+                              },
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+
+                    const SizedBox(height: 8),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  Future<void> _addSpouseFlow(BuildContext context, {required int personId}) async {
+    final person = store.getNode(personId);
+
+    if (person.spouses.isNotEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('${person.name} already has a spouse.')),
+      );
+      return;
+    }
+
+    if (store.hasCoParentViaChildren(personId)) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('${person.name} already has a co-parent.')),
+      );
+      return;
+    }
+
+    final name = await _promptText(
+      context,
+      title: 'Spouse Name',
+      initial: 'New Spouse',
+    );
+    if (name == null) return;
+
+    final birthday = await _pickBirthday(context, initial: null);
+    final photoBytes = await _addPhotoFlow(context);
+
+    final added = store.addSpouse(
+      personId: personId,
+      name: name,
+      birthday: birthday,
+      photoBytes: photoBytes,
+    );
+
+    if (added == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Could not add spouse.')),
+      );
+    }
+  }
+
+  Future<void> _addParentFlow(BuildContext context, {required int personId}) async {
+    final person = store.getNode(personId);
+
+    if (person.parents.length >= 2) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('${person.name} already has 2 parents.')),
+      );
+      return;
+    }
+
+    final (femaleP, maleP) = store.parentPairForPerson(personId);
+
+    final name = await _promptText(
+      context,
+      title: 'Parent Name',
+      initial: 'New Parent',
+    );
+    if (name == null) return;
+
+    final options = <Gender>[
+      if (femaleP == null) Gender.female,
+      if (maleP == null) Gender.male,
+    ];
+
+    if (options.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('${person.name} already has 2 parents.')),
+      );
+      return;
+    }
+
+    final chosen = await showModalBottomSheet<Gender>(
+      context: context,
+      showDragHandle: true,
+      builder: (ctx) {
+        return SafeArea(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const SizedBox(height: 6),
+              const Text('Select Parent Gender', style: TextStyle(fontWeight: FontWeight.w600)),
+              const SizedBox(height: 8),
+              for (final g in options)
+                ListTile(
+                  leading: Icon(g.icon),
+                  title: Text(g.label),
+                  onTap: () => Navigator.pop(ctx, g),
+                ),
+              const SizedBox(height: 12),
+            ],
+          ),
+        );
+      },
+    );
+
+    if (chosen == null) return;
+
+    final birthday = await _pickBirthday(context, initial: null);
+    final photoBytes = await _addPhotoFlow(context);
+
+    final added = store.addParent(
+      personId: personId,
+      parentGender: chosen,
+      name: name,
+      birthday: birthday,
+      photoBytes: photoBytes,
+    );
+    if (added == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Could not add parent (blocked).')),
+      );
+    }
+  }
+
+  Future<void> _addChildFlow(BuildContext context, {required int fromNodeId}) async {
+    final name = await _promptText(
+      context,
+      title: 'Child Name',
+      initial: 'New Child',
+    );
+    if (name == null) return;
+
+    final chosen = await _selectGender(context);
+    if (chosen == null) return;
+
+    final birthday = await _pickBirthday(context, initial: null);
+    final photoBytes = await _addPhotoFlow(context);
+
+    store.addChild(
+      fromNodeId: fromNodeId,
+      name: name,
+      childGender: chosen,
+      birthday: birthday,
+      photoBytes: photoBytes,
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedBuilder(
+      animation: store,
+      builder: (context, _) {
+        final layoutRaw = FamilyTreeLayout(
+          store: store,
+          cardSize: cardSize,
+          hGap: hGap,
+          vGap: vGap,
+        ).compute();
+
+        final origin = const Offset(virtualSize / 2, virtualSize / 2);
+        final layout = <int, Offset>{
+          for (final e in layoutRaw.entries) e.key: e.value + origin,
+        };
+
+        _lastLayoutScene = layout;
+
+        final bounds = _computeBounds(layout);
+
+        if (!_didInitialCenter && layout.isNotEmpty) {
+          _didInitialCenter = true;
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            if (!mounted) return;
+            _fitToScreen(bounds);
+          });
+        }
+
+        final canvasSize = const Size(virtualSize, virtualSize);
+        final isEmpty = store.nodes.isEmpty;
+
+        return Scaffold(
+          appBar: AppBar(
+            title: const Text('Family Tree Builder'),
+            actions: [
+              IconButton(
+                tooltip: 'Log out',
+                onPressed: _logout,
+                icon: const Icon(Icons.logout),
+              ),
+            ],
+          ),
+          // Removed the drawer completely
+          body: Stack(
+            children: [
+              GestureDetector(
+                behavior: HitTestBehavior.translucent,
+                onTapDown: (_) {
+                  if (_isLinking) return;
+                  if (_ctrlPressed) return;
+                  _clearCtrlSelection();
+                },
+                child: InteractiveViewer(
+                  transformationController: _tc,
+                  constrained: false,
+                  boundaryMargin: const EdgeInsets.all(1000000),
+                  clipBehavior: Clip.none,
+                  minScale: _minZoom,
+                  maxScale: _maxZoom,
+                  child: SizedBox(
+                    width: canvasSize.width,
+                    height: canvasSize.height,
+                    child: Stack(
+                      clipBehavior: Clip.none,
+                      children: [
+                        if (!isEmpty)
+                          CustomPaint(
+                            size: canvasSize,
+                            painter: _ConnectorPainter(
+                              store: store,
+                              positions: layout,
+                              cardSize: cardSize,
+                            ),
+                          ),
+                        for (final entry in layout.entries)
+                          _AnimatedNode(
+                            node: store.getNode(entry.key),
+                            topLeft: entry.value,
+                            size: cardSize,
+                            isSelected: _ctrlSelectedIds.contains(entry.key),
+                            isHovered: _ctrlSelectedIds.contains(entry.key) ||
+                                entry.key == _hoveredNodeId ||
+                                (_isLinking && _linkFromNodeId == entry.key),
+                            dragEnabled: !_isLinking,
+                            onHoverChanged: (hovering) {
+                              if (!mounted) return;
+                              setState(() {
+                                if (hovering) {
+                                  _hoveredNodeId = entry.key;
+                                } else if (_hoveredNodeId == entry.key) {
+                                  _hoveredNodeId = null;
+                                }
+                              });
+                            },
+                            onTapSelect: (id) {
+                              if (_isLinking) return;
+
+                              if (_ctrlPressed) {
+                                _toggleCtrlSelect(id);
+                                return;
+                              }
+
+                              if (_ctrlSelectedIds.isNotEmpty) {
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  const SnackBar(
+                                    content: Text('Selection active. Ctrl+Click tiles to unselect.'),
+                                  ),
+                                );
+                                return;
+                              }
+
+                              _openNodeActions(context, id);
+                            },
+                            onDragStart: () {
+                              if (_isLinking) return;
+
+                              if (_ctrlPressed && !_ctrlSelectedIds.contains(entry.key)) {
+                                _toggleCtrlSelect(entry.key);
+                              }
+                            },
+                            onDragEnd: () {},
+                            onDragDelta: (delta) {
+                              if (_isLinking) return;
+
+                              final draggedId = entry.key;
+                              final ids = (_ctrlSelectedIds.isNotEmpty &&
+                                      _ctrlSelectedIds.contains(draggedId))
+                                  ? _ctrlSelectedIds
+                                  : <int>{draggedId};
+
+                              if (ids.length == 1) {
+                                store.addManualOffset(draggedId, delta);
+                              } else {
+                                store.addManualOffsetBulk(ids, delta);
+                              }
+                            },
+                            onStartPortDrag: (port, globalStart) {
+                              final topLeft = layout[entry.key]!;
+                              final startScene = switch (port) {
+                                _LinkPort.parentTop =>
+                                  Offset(topLeft.dx + cardSize.width / 2, topLeft.dy),
+                                _LinkPort.childBottom => Offset(
+                                    topLeft.dx + cardSize.width / 2,
+                                    topLeft.dy + cardSize.height),
+                                _LinkPort.spouseLeft =>
+                                  Offset(topLeft.dx, topLeft.dy + cardSize.height / 2),
+                                _LinkPort.spouseRight => Offset(
+                                    topLeft.dx + cardSize.width,
+                                    topLeft.dy + cardSize.height / 2),
+                              };
+
+                              _startLink(
+                                fromNodeId: entry.key,
+                                port: port,
+                                startScene: startScene,
+                                startViewport: _globalToViewport(globalStart),
+                              );
+                            },
+                            onUpdatePortDrag: (g) => _updateLink(_globalToViewport(g)),
+                            onEndPortDrag: (g) => _endLink(_globalToViewport(g)),
+                            onTapPort: _handlePortTap,
+                          ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+              if (_isLinking)
+                Positioned.fill(
+                  child: IgnorePointer(
+                    child: CustomPaint(
+                      painter: _LinkPreviewPainter(
+                        start: _sceneToViewport(_linkStartScene),
+                        end: (_hoverTargetId != null) ? _snappedEndViewport : _linkCurrentViewport,
+                      ),
+                    ),
+                  ),
+                ),
+              if (isEmpty)
+                Center(
+                  child: Padding(
+                    padding: const EdgeInsets.all(18),
+                    child: Material(
+                      elevation: 2,
+                      borderRadius: BorderRadius.circular(18),
+                      color: Colors.white,
+                      child: Padding(
+                        padding: const EdgeInsets.fromLTRB(18, 16, 18, 16),
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            const Icon(Icons.account_tree, size: 42),
+                            const SizedBox(height: 10),
+                            const Text(
+                              'Start your family tree',
+                              style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700),
+                            ),
+                            const SizedBox(height: 6),
+                            Text(
+                              'Add your first member to begin.',
+                              style: TextStyle(color: Colors.grey.shade700),
+                            ),
+                            const SizedBox(height: 14),
+                            FilledButton.icon(
+                              onPressed: () => _addFirstMemberFlow(context),
+                              icon: const Icon(Icons.person_add),
+                              label: const Text('Add First Member'),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              if (!isEmpty)
+                Positioned(
+                  right: 16,
+                  bottom: 16,
+                  child: Material(
+                    elevation: 2,
+                    color: Colors.white,
+                    borderRadius: BorderRadius.circular(16),
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                      child: SizedBox(
+                        width: 290,
+                        child: Row(
+                          children: [
+                            IconButton(
+                              tooltip: 'Zoom out',
+                              icon: const Icon(Icons.remove, size: 18),
+                              onPressed: () {
+                                final next = (_zoomValue / 1.15).clamp(_minZoom, _maxZoom);
+                                _setZoom(next);
+                              },
+                            ),
+                            Expanded(
+                              child: Slider(
+                                value: _zoomValue.clamp(_minZoom, _maxZoom),
+                                min: _minZoom,
+                                max: _maxZoom,
+                                onChanged: (v) => _setZoom(v),
+                              ),
+                            ),
+                            IconButton(
+                              tooltip: 'Zoom in',
+                              icon: const Icon(Icons.add, size: 18),
+                              onPressed: () {
+                                final next = (_zoomValue * 1.15).clamp(_minZoom, _maxZoom);
+                                _setZoom(next);
+                              },
+                            ),
+                            const SizedBox(width: 6),
+                            Container(width: 1, height: 22, color: const Color(0xFFE2E6EE)),
+                            const SizedBox(width: 6),
+                            IconButton(
+                              tooltip: 'Add standalone member',
+                              icon: const Icon(Icons.person_add_alt_1, size: 18),
+                              onPressed: () => _addStandaloneMemberFlow(context),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  Rect _computeBounds(Map<int, Offset> pos) {
+    if (pos.isEmpty) return const Rect.fromLTWH(0, 0, 800, 600);
+
+    double minX = double.infinity;
+    double minY = double.infinity;
+    double maxX = -double.infinity;
+    double maxY = -double.infinity;
+
+    for (final p in pos.values) {
+      minX = min(minX, p.dx);
+      minY = min(minY, p.dy);
+      maxX = max(maxX, p.dx + cardSize.width);
+      maxY = max(maxY, p.dy + cardSize.height);
+    }
+
+    const double margin = 300;
+    return Rect.fromLTRB(minX - margin, minY - margin, maxX + margin, maxY + margin);
+  }
+
+  void _fitToScreen(Rect bounds) {
+    final screenSize = MediaQuery.of(context).size;
+    final scale = min(screenSize.width / bounds.width, screenSize.height / bounds.height) * 0.8;
+
+    _syncingFromController = true;
+    _tc.value = Matrix4.identity()
+      ..translate(screenSize.width / 2, screenSize.height / 2)
+      ..scale(scale)
+      ..translate(-bounds.center.dx, -bounds.center.dy);
+    _syncingFromController = false;
+
+    final clamped = scale.clamp(_minZoom, _maxZoom);
+    setState(() => _zoomValue = clamped);
+  }
+}
+
+class _HorizontalActionTile extends StatelessWidget {
+  final IconData icon;
+  final String title;
+  final String subtitle;
+  final Color color;
+  final VoidCallback onTap;
+  final bool enabled;
+
+  const _HorizontalActionTile({
+    required this.icon,
+    required this.title,
+    required this.subtitle,
+    required this.color,
+    required this.onTap,
+    this.enabled = true,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 4),
+      child: Material(
+        borderRadius: BorderRadius.circular(16),
+        color: enabled ? Colors.white : Colors.grey.shade100,
+        child: InkWell(
+          onTap: enabled ? onTap : null,
+          borderRadius: BorderRadius.circular(16),
+          child: Container(
+            width: 90, // Increased from 80 to 90
+            padding: const EdgeInsets.all(12),
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              crossAxisAlignment: CrossAxisAlignment.center,
+              children: [
+                Container(
+                  width: 36,
+                  height: 36,
+                  decoration: BoxDecoration(
+                    color: enabled
+                        ? color.withOpacity(0.1)
+                        : Colors.grey.withOpacity(0.1),
+                    shape: BoxShape.circle,
+                  ),
+                  child: Icon(
+                    icon,
+                    color: enabled ? color : Colors.grey,
+                    size: 18, // Reduced from 20 to 18
+                  ),
+                ),
+                const SizedBox(height: 8),
+                SizedBox(
+                  height: 32, // Fixed height for text area
+                  child: Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      Flexible(
+                        child: Text(
+                          title,
+                          style: TextStyle(
+                            fontSize: 11, // Reduced from 12 to 11
+                            fontWeight: FontWeight.w600,
+                            color: enabled ? Colors.black87 : Colors.grey,
+                          ),
+                          textAlign: TextAlign.center,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
+                      Flexible(
+                        child: Text(
+                          subtitle,
+                          style: TextStyle(
+                            fontSize: 10, // Reduced from 11 to 10
+                            color: enabled ? color : Colors.grey,
+                          ),
+                          textAlign: TextAlign.center,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
     );
   }
 }
@@ -623,21 +2293,48 @@ class _AnimatedNode extends StatefulWidget {
     required this.node,
     required this.topLeft,
     required this.size,
-    required this.onTap,
+    required this.onTapSelect,
     required this.onDragDelta,
+    required this.onDragStart,
+    required this.onDragEnd,
+    required this.onStartPortDrag,
+    required this.onUpdatePortDrag,
+    required this.onEndPortDrag,
+    required this.onTapPort,
+    required this.isHovered,
+    required this.isSelected,
+    required this.onHoverChanged,
+    required this.dragEnabled,
   });
 
   final FamilyNode node;
   final Offset topLeft;
   final Size size;
-  final VoidCallback onTap;
+
+  final ValueChanged<int> onTapSelect;
+
   final ValueChanged<Offset> onDragDelta;
+  final VoidCallback onDragStart;
+  final VoidCallback onDragEnd;
+
+  final void Function(_LinkPort port, Offset globalStart) onStartPortDrag;
+  final void Function(Offset globalPos) onUpdatePortDrag;
+  final void Function(Offset globalPos) onEndPortDrag;
+
+  final void Function(int nodeId, _LinkPort port) onTapPort;
+
+  final bool isHovered;
+  final bool isSelected;
+  final ValueChanged<bool> onHoverChanged;
+  final bool dragEnabled;
 
   @override
   State<_AnimatedNode> createState() => _AnimatedNodeState();
 }
 
 class _AnimatedNodeState extends State<_AnimatedNode> {
+  Offset? _hoverLocal;
+
   @override
   Widget build(BuildContext context) {
     return AnimatedPositioned(
@@ -647,69 +2344,28 @@ class _AnimatedNodeState extends State<_AnimatedNode> {
       top: widget.topLeft.dy,
       width: widget.size.width,
       height: widget.size.height,
-      child: GestureDetector(
-        onTap: widget.onTap,
-        onPanUpdate: (d) => widget.onDragDelta(d.delta),
-        child: _MemberCard(node: widget.node),
-      ),
-    );
-  }
-}
-
-class _MemberCard extends StatelessWidget {
-  const _MemberCard({required this.node});
-
-  final FamilyNode node;
-
-  @override
-  Widget build(BuildContext context) {
-    final tone = switch (node.role) {
-      Role.mother => const Color(0xFFEAF3FF),
-      Role.father => const Color(0xFFEFF8F1),
-      Role.child => const Color(0xFFFFF5E8),
-    };
-
-    return Material(
-      elevation: 2,
-      shadowColor: Colors.black12,
-      borderRadius: BorderRadius.circular(16),
-      color: Colors.white,
-      child: InkWell(
-        borderRadius: BorderRadius.circular(16),
-        child: Padding(
-          padding: const EdgeInsets.all(10),
-          child: Row(
-            children: [
-              Container(
-                width: 42,
-                height: 42,
-                decoration: BoxDecoration(
-                  color: tone,
-                  borderRadius: BorderRadius.circular(12),
-                ),
-                child: Icon(node.role.icon, color: Colors.black87),
-              ),
-              const SizedBox(width: 10),
-              Expanded(
-                child: Column(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      node.name,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(fontWeight: FontWeight.w700),
-                    ),
-                    const SizedBox(height: 4),
-                    Text(
-                      node.role.label,
-                      style: TextStyle(color: Colors.grey.shade700, fontSize: 12),
-                    ),
-                  ],
-                ),
-              ),
-            ],
+      child: MouseRegion(
+        onEnter: (_) => widget.onHoverChanged(true),
+        onExit: (_) {
+          setState(() => _hoverLocal = null);
+          widget.onHoverChanged(false);
+        },
+        onHover: (e) => setState(() => _hoverLocal = e.localPosition),
+        child: GestureDetector(
+          onTap: () => widget.onTapSelect(widget.node.id),
+          onPanStart: widget.dragEnabled ? (_) => widget.onDragStart() : null,
+          onPanUpdate: widget.dragEnabled ? (d) => widget.onDragDelta(d.delta) : null,
+          onPanEnd: widget.dragEnabled ? (_) => widget.onDragEnd() : null,
+          child: _MemberCard(
+            node: widget.node,
+            showPorts: widget.isHovered,
+            hoverLocal: _hoverLocal,
+            size: widget.size,
+            isSelected: widget.isSelected,
+            onStartPortDrag: widget.onStartPortDrag,
+            onUpdatePortDrag: widget.onUpdatePortDrag,
+            onEndPortDrag: widget.onEndPortDrag,
+            onTapPort: widget.onTapPort,
           ),
         ),
       ),
@@ -717,7 +2373,329 @@ class _MemberCard extends StatelessWidget {
   }
 }
 
-/// Draws thin connector lines (no arrows).
+class _MemberCard extends StatelessWidget {
+  const _MemberCard({
+    required this.node,
+    required this.showPorts,
+    required this.hoverLocal,
+    required this.size,
+    required this.isSelected,
+    required this.onStartPortDrag,
+    required this.onUpdatePortDrag,
+    required this.onEndPortDrag,
+    required this.onTapPort,
+  });
+
+  final FamilyNode node;
+  final bool showPorts;
+  final Offset? hoverLocal;
+  final Size size;
+  final bool isSelected;
+  final void Function(_LinkPort port, Offset globalStart) onStartPortDrag;
+  final void Function(Offset globalPos) onUpdatePortDrag;
+  final void Function(Offset globalPos) onEndPortDrag;
+
+  final void Function(int nodeId, _LinkPort port) onTapPort;
+
+  bool get _canShowParent => showPorts && node.parents.length < 2;
+  bool get _canShowChild => showPorts;
+  bool get _canShowSpouse => showPorts && node.spouses.isEmpty;
+
+  static const double _edgeThreshold = 26.0;
+
+  _LinkPort? _nearestAllowedPort() {
+    if (!showPorts) return null;
+    final p = hoverLocal;
+    if (p == null) return null;
+
+    final w = size.width;
+    final h = size.height;
+
+    final dTop = p.dy;
+    final dBottom = (h - p.dy).abs();
+    final dLeft = p.dx;
+    final dRight = (w - p.dx).abs();
+
+    final minDist = [dTop, dBottom, dLeft, dRight].reduce(min);
+    if (minDist > _edgeThreshold) return null;
+
+    final candidates = <(_LinkPort port, double dist)>[
+      (_LinkPort.parentTop, dTop),
+      (_LinkPort.childBottom, dBottom),
+      (_LinkPort.spouseLeft, dLeft),
+      (_LinkPort.spouseRight, dRight),
+    ]..sort((a, b) => a.$2.compareTo(b.$2));
+
+    for (final c in candidates) {
+      switch (c.$1) {
+        case _LinkPort.parentTop:
+          if (_canShowParent) return c.$1;
+          break;
+        case _LinkPort.childBottom:
+          if (_canShowChild) return c.$1;
+          break;
+        case _LinkPort.spouseLeft:
+        case _LinkPort.spouseRight:
+          if (_canShowSpouse) return c.$1;
+          break;
+      }
+    }
+
+    return null;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final activePort = _nearestAllowedPort();
+
+    return Container(
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(16),
+        border: isSelected ? Border.all(color: const Color(0xFF4C7DFF), width: 2) : null,
+      ),
+      child: Material(
+        elevation: 2,
+        shadowColor: Colors.black12,
+        borderRadius: BorderRadius.circular(16),
+        color: Colors.white,
+        child: Stack(
+          clipBehavior: Clip.none,
+          children: [
+            InkWell(
+              borderRadius: BorderRadius.circular(16),
+              child: Padding(
+                padding: const EdgeInsets.all(10),
+                child: Row(
+                  children: [
+                    _buildMemberPhoto(node),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: Column(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            node.name,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(fontWeight: FontWeight.w700),
+                          ),
+                          const SizedBox(height: 4),
+                          Text(
+                            node.gender.label,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(color: Colors.grey.shade700, fontSize: 12),
+                          ),
+                          if (node.birthday != null) ...[
+                            const SizedBox(height: 2),
+                            Text(
+                              _formatDate(node.birthday!),
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: TextStyle(color: Colors.grey.shade600, fontSize: 12),
+                            ),
+                          ],
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+
+            if (activePort == _LinkPort.parentTop)
+              Positioned(
+                top: -10,
+                left: (size.width / 2) - 10,
+                child: _PlusPort(
+                  tooltip: 'Add Parent',
+                  onTap: () => onTapPort(node.id, _LinkPort.parentTop),
+                  onStart: (g) => onStartPortDrag(_LinkPort.parentTop, g),
+                  onUpdate: onUpdatePortDrag,
+                  onEnd: onEndPortDrag,
+                ),
+              ),
+
+            if (activePort == _LinkPort.childBottom)
+              Positioned(
+                bottom: -10,
+                left: (size.width / 2) - 10,
+                child: _PlusPort(
+                  tooltip: 'Add Child',
+                  onTap: () => onTapPort(node.id, _LinkPort.childBottom),
+                  onStart: (g) => onStartPortDrag(_LinkPort.childBottom, g),
+                  onUpdate: onUpdatePortDrag,
+                  onEnd: onEndPortDrag,
+                ),
+              ),
+
+            if (activePort == _LinkPort.spouseLeft)
+              Positioned(
+                left: -10,
+                top: (size.height / 2) - 10,
+                child: _PlusPort(
+                  tooltip: 'Add Spouse',
+                  onTap: () => onTapPort(node.id, _LinkPort.spouseLeft),
+                  onStart: (g) => onStartPortDrag(_LinkPort.spouseLeft, g),
+                  onUpdate: onUpdatePortDrag,
+                  onEnd: onEndPortDrag,
+                ),
+              ),
+
+            if (activePort == _LinkPort.spouseRight)
+              Positioned(
+                right: -10,
+                top: (size.height / 2) - 10,
+                child: _PlusPort(
+                  tooltip: 'Add Spouse',
+                  onTap: () => onTapPort(node.id, _LinkPort.spouseRight),
+                  onStart: (g) => onStartPortDrag(_LinkPort.spouseRight, g),
+                  onUpdate: onUpdatePortDrag,
+                  onEnd: onEndPortDrag,
+                ),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _PlusPort extends StatefulWidget {
+  const _PlusPort({
+    required this.tooltip,
+    required this.onStart,
+    required this.onUpdate,
+    required this.onEnd,
+    this.onTap,
+  });
+
+  final String tooltip;
+  final void Function(Offset globalPos) onStart;
+  final void Function(Offset globalPos) onUpdate;
+  final void Function(Offset globalPos) onEnd;
+
+  final VoidCallback? onTap;
+
+  @override
+  State<_PlusPort> createState() => _PlusPortState();
+}
+
+class _PlusPortState extends State<_PlusPort> {
+  static const double _dragStartThreshold = 6.0;
+
+  Offset? _downGlobal;
+  Offset? _lastGlobal;
+  bool _started = false;
+
+  void _reset() {
+    _downGlobal = null;
+    _lastGlobal = null;
+    _started = false;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: widget.onTap,
+      child: Tooltip(
+        message: widget.tooltip,
+        child: Listener(
+          behavior: HitTestBehavior.translucent,
+          onPointerDown: (e) {
+            _downGlobal = e.position;
+            _lastGlobal = e.position;
+            _started = false;
+          },
+          onPointerMove: (e) {
+            if (_downGlobal == null) return;
+            _lastGlobal = e.position;
+
+            final dist = (e.position - _downGlobal!).distance;
+
+            if (!_started && dist >= _dragStartThreshold) {
+              _started = true;
+              widget.onStart(_downGlobal!);
+            }
+
+            if (_started) {
+              widget.onUpdate(e.position);
+            }
+          },
+          onPointerUp: (_) {
+            if (_started) {
+              widget.onEnd(_lastGlobal ?? Offset.zero);
+            }
+            _reset();
+          },
+          onPointerCancel: (_) {
+            if (_started) {
+              widget.onEnd(_lastGlobal ?? Offset.zero);
+            }
+            _reset();
+          },
+          child: Container(
+            width: 20,
+            height: 20,
+            decoration: BoxDecoration(
+              color: Colors.white,
+              shape: BoxShape.circle,
+              border: Border.all(color: const Color(0xFFB9C0CC), width: 1),
+              boxShadow: const [
+                BoxShadow(
+                  blurRadius: 6,
+                  offset: Offset(0, 2),
+                  color: Colors.black12,
+                ),
+              ],
+            ),
+            child: const Center(
+              child: Icon(Icons.add, size: 14, color: Color(0xFF6E7685)),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _LinkPreviewPainter extends CustomPainter {
+  _LinkPreviewPainter({required this.start, required this.end});
+  final Offset start;
+  final Offset end;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final paint = Paint()
+      ..color = const Color(0xFF6E7685)
+      ..strokeWidth = 2
+      ..style = PaintingStyle.stroke
+      ..strokeCap = StrokeCap.round;
+
+    final mid = Offset((start.dx + end.dx) / 2, (start.dy + end.dy) / 2);
+    final ctrl = Offset(mid.dx, min(start.dy, end.dy) - 40);
+
+    final path = Path()
+      ..moveTo(start.dx, start.dy)
+      ..quadraticBezierTo(ctrl.dx, ctrl.dy, end.dx, end.dy);
+
+    canvas.drawPath(path, paint);
+    canvas.drawCircle(end, 4.5, Paint()..color = const Color(0xFF6E7685));
+  }
+
+  @override
+  bool shouldRepaint(covariant _LinkPreviewPainter oldDelegate) {
+    return oldDelegate.start != start || oldDelegate.end != end;
+  }
+}
+
+class _Group {
+  _Group({required this.parentIds});
+  final List<int> parentIds;
+  final List<int> childIds = [];
+}
+
 class _ConnectorPainter extends CustomPainter {
   _ConnectorPainter({
     required this.store,
@@ -734,36 +2712,156 @@ class _ConnectorPainter extends CustomPainter {
     final paint = Paint()
       ..color = const Color(0xFFB9C0CC)
       ..strokeWidth = 1.2
-      ..style = PaintingStyle.stroke;
+      ..style = PaintingStyle.stroke
+      ..strokeCap = StrokeCap.round;
 
-    for (final n in store.nodes.values) {
-      final parentPos = positions[n.id];
-      if (parentPos == null) continue;
+    final spousePaint = Paint()
+      ..color = const Color(0xFFB9C0CC)
+      ..strokeWidth = 1.2
+      ..style = PaintingStyle.stroke
+      ..strokeCap = StrokeCap.round;
 
-      final parentBottom = Offset(
-        parentPos.dx + cardSize.width / 2,
-        parentPos.dy + cardSize.height,
-      );
+    Offset topCenterOf(int nodeId) {
+      final p = positions[nodeId]!;
+      return Offset(p.dx + cardSize.width / 2, p.dy);
+    }
 
-      for (final childId in n.children) {
-        final childPos = positions[childId];
-        if (childPos == null) continue;
+    Offset bottomCenterOf(int nodeId) {
+      final p = positions[nodeId]!;
+      return Offset(p.dx + cardSize.width / 2, p.dy + cardSize.height);
+    }
 
-        final childTop = Offset(
-          childPos.dx + cardSize.width / 2,
-          childPos.dy,
-        );
+    final Map<String, _Group> groups = {};
+    final Set<String> couplesWithChildren = {};
 
-        final midY = (parentBottom.dy + childTop.dy) / 2;
-        canvas.drawLine(parentBottom, Offset(parentBottom.dx, midY), paint);
-        canvas.drawLine(Offset(parentBottom.dx, midY), Offset(childTop.dx, midY), paint);
-        canvas.drawLine(Offset(childTop.dx, midY), childTop, paint);
+    for (final child in store.nodes.values) {
+      if (child.parents.isEmpty) continue;
+      if (!positions.containsKey(child.id)) continue;
+
+      final (femaleP, maleP) = store.parentPairForPerson(child.id);
+      final parentIds = <int>[
+        if (femaleP != null) femaleP,
+        if (maleP != null) maleP,
+      ]..sort();
+
+      if (parentIds.isEmpty) continue;
+
+      bool parentsHavePos = true;
+      for (final pid in parentIds) {
+        if (!positions.containsKey(pid)) parentsHavePos = false;
+      }
+      if (!parentsHavePos) continue;
+
+      final key = parentIds.join('_');
+      couplesWithChildren.add(key);
+
+      groups.putIfAbsent(key, () => _Group(parentIds: parentIds));
+      groups[key]!.childIds.add(child.id);
+    }
+
+    final drawnSpousePairs = <String>{};
+
+    for (final a in store.nodes.values) {
+      if (!positions.containsKey(a.id)) continue;
+
+      for (final bId in a.spouses) {
+        if (!positions.containsKey(bId)) continue;
+
+        final lo = min(a.id, bId);
+        final hi = max(a.id, bId);
+
+        final pairKey = '${lo}_$hi';
+        if (drawnSpousePairs.contains(pairKey)) continue;
+        drawnSpousePairs.add(pairKey);
+
+        if (couplesWithChildren.contains(pairKey)) continue;
+
+        final p1 = bottomCenterOf(a.id);
+        final p2 = bottomCenterOf(bId);
+
+        const double coupleGap = 18;
+        final coupleY = max(p1.dy, p2.dy) + coupleGap;
+
+        final leftX = min(p1.dx, p2.dx);
+        final rightX = max(p1.dx, p2.dx);
+        final midX = (p1.dx + p2.dx) / 2;
+
+        canvas.drawLine(p1, Offset(p1.dx, coupleY), spousePaint);
+        canvas.drawLine(p2, Offset(p2.dx, coupleY), spousePaint);
+        canvas.drawLine(Offset(leftX, coupleY), Offset(rightX, coupleY), spousePaint);
+
+        final heart = TextPainter(
+          text: const TextSpan(
+            text: '❤',
+            style: TextStyle(fontSize: 12, color: Color(0xFFB9C0CC)),
+          ),
+          textDirection: TextDirection.ltr,
+        )..layout();
+        heart.paint(canvas, Offset(midX - heart.width / 2, coupleY - heart.height / 2));
+      }
+    }
+
+    for (final g in groups.values) {
+      final childTops = <Offset>[];
+      for (final cid in g.childIds) {
+        if (!positions.containsKey(cid)) continue;
+        childTops.add(topCenterOf(cid));
+      }
+      if (childTops.isEmpty) continue;
+
+      final parentBottoms = <Offset>[];
+      for (final pid in g.parentIds) {
+        if (!positions.containsKey(pid)) continue;
+        parentBottoms.add(bottomCenterOf(pid));
+      }
+      if (parentBottoms.isEmpty) continue;
+
+      final parentsBottomY = parentBottoms.map((p) => p.dy).reduce(max);
+      final minChildTopY = childTops.map((e) => e.dy).reduce(min);
+      final busY = (parentsBottomY + minChildTopY) / 2;
+
+      double minX = childTops.map((e) => e.dx).reduce(min);
+      double maxX = childTops.map((e) => e.dx).reduce(max);
+
+      final isCouple = parentBottoms.length >= 2;
+      final anchorX = isCouple
+          ? (parentBottoms[0].dx + parentBottoms[1].dx) / 2
+          : parentBottoms.first.dx;
+
+      minX = min(minX, anchorX);
+      maxX = max(maxX, anchorX);
+
+      if (!isCouple) {
+        final pb = parentBottoms.first;
+        canvas.drawLine(pb, Offset(pb.dx, busY), paint);
+        canvas.drawLine(Offset(minX, busY), Offset(maxX, busY), paint);
+      } else {
+        final p1 = parentBottoms[0];
+        final p2 = parentBottoms[1];
+
+        final coupleY = p1.dy + (busY - p1.dy) * 0.35;
+        final leftX = min(p1.dx, p2.dx);
+        final rightX = max(p1.dx, p2.dx);
+        final midX = (p1.dx + p2.dx) / 2;
+
+        canvas.drawLine(p1, Offset(p1.dx, coupleY), paint);
+        canvas.drawLine(p2, Offset(p2.dx, coupleY), paint);
+        canvas.drawLine(Offset(leftX, coupleY), Offset(rightX, coupleY), paint);
+
+        canvas.drawLine(Offset(midX, coupleY), Offset(midX, busY), paint);
+        canvas.drawLine(Offset(minX, busY), Offset(maxX, busY), paint);
+      }
+
+      for (final ct in childTops) {
+        canvas.drawLine(Offset(ct.dx, busY), ct, paint);
       }
     }
   }
 
   @override
   bool shouldRepaint(covariant _ConnectorPainter oldDelegate) {
-    return oldDelegate.positions != positions || oldDelegate.store != store;
+    return oldDelegate.positions != positions ||
+        oldDelegate.store != store ||
+        oldDelegate.cardSize != cardSize;
   }
 }
