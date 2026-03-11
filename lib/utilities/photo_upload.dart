@@ -7,13 +7,9 @@ final cloudinary = CloudinaryService();
 
 Future<String?> pickAndUploadPhoto() async {
 
-  print("UPLOAD STARTED");
-
   final XFile? picked = await picker.pickImage(
     source: ImageSource.gallery,
   );
-
-  print("IMAGE PICKED: $picked");
 
   if (picked == null) return null;
 
@@ -23,8 +19,6 @@ Future<String?> pickAndUploadPhoto() async {
     bytes,
     fileName: picked.name,
   );
-
-  print("UPLOAD URL: $url");
 
   return url;
 }

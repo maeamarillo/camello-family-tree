@@ -27,9 +27,6 @@ class CloudinaryService {
     final streamed = await request.send();
     final response = await http.Response.fromStream(streamed);
 
-    print("Cloudinary status: ${response.statusCode}");
-    print("Cloudinary body: ${response.body}");
-
     final data = jsonDecode(response.body);
     return data['secure_url'];
   }

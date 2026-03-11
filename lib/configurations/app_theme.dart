@@ -4,6 +4,6 @@ class AppTheme {
   static ThemeData get lightTheme => ThemeData(
         useMaterial3: true,
         colorScheme: ColorScheme.fromSeed(seedColor: Colors.blueGrey),
-        scaffoldBackgroundColor: const Color(0xFFF6F7F9),
+        scaffoldBackgroundColor: const Color.fromARGB(255, 255, 255, 255),
       );
 }

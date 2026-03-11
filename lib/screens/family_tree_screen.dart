@@ -1,23 +1,23 @@
 // lib/screens/family_tree_screen.dart
 import 'dart:async';
 import 'dart:math';
+
 import 'package:app/screens/auth/auth_service.dart';
 import 'package:app/screens/auth/desktop_body.dart';
 import 'package:app/services/cloudinary_service.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:image_picker/image_picker.dart';
 
 import '../models/family_node.dart';
 import '../models/gender.dart';
 import '../models/member_details.dart';
 import '../models/member_form_result.dart';
+import '../pages/photo_viewer_page.dart';
 import '../services/family_tree_store.dart';
 import '../utilities/date_format.dart';
 import '../utilities/geometry.dart';
-import '../pages/member_form_sheet.dart';
-import '../pages/photo_viewer_page.dart';
-import '../widgets/horizontal_action_tile.dart';
 import '../widgets/link_ports.dart';
 import '../widgets/member_photo.dart';
 import '../widgets/plus_port.dart';
@@ -38,8 +38,7 @@ class FamilyTreeLayout {
   });
 
   final FamilyTreeStore store;
-  final // spacing
-      Size cardSize;
+  final Size cardSize;
   final double hGap;
   final double vGap;
 
@@ -48,7 +47,6 @@ class FamilyTreeLayout {
     if (nodes.isEmpty) return {};
 
     final pos = <int, Offset>{};
-
     final xStep = cardSize.width + hGap;
     final yStep = cardSize.height + vGap;
 
@@ -56,9 +54,10 @@ class FamilyTreeLayout {
       pos[n.id] = Offset(n.slotX * xStep, n.levelY * yStep);
     }
 
-    // Keep everything away from origin so we have room to pan around
     const double pad = 400;
-    double minX = double.infinity, minY = double.infinity;
+    double minX = double.infinity;
+    double minY = double.infinity;
+
     for (final p in pos.values) {
       minX = min(minX, p.dx);
       minY = min(minY, p.dy);
@@ -73,7 +72,6 @@ class FamilyTreeLayout {
       }
     }
 
-    // Apply manual offsets (drag reposition)
     for (final n in nodes.values) {
       pos[n.id] = pos[n.id]! + n.manualOffset;
     }
@@ -82,52 +80,140 @@ class FamilyTreeLayout {
   }
 }
 
+class _MemberFormDrawerRequest {
+  const _MemberFormDrawerRequest({
+    required this.title,
+    required this.showNameField,
+    required this.initialName,
+    required this.initialGender,
+    required this.allowedGenders,
+    required this.initialDetails,
+    required this.initialBirthday,
+    required this.initialPhotoBytes,
+    required this.initialPhotoProvider,
+    required this.allowRemovePhoto,
+    required this.allowClearBirthday,
+  });
+
+  final String title;
+  final bool showNameField;
+  final String? initialName;
+  final Gender initialGender;
+  final List<Gender> allowedGenders;
+  final MemberDetails initialDetails;
+  final DateTime? initialBirthday;
+  final Uint8List? initialPhotoBytes;
+  final ImageProvider? initialPhotoProvider;
+  final bool allowRemovePhoto;
+  final bool allowClearBirthday;
+}
+
 class _FamilyTreeScreenState extends State<FamilyTreeScreen> {
   late final FamilyTreeStore store;
   final CloudinaryService _cloudinary = CloudinaryService();
 
-  static const Size cardSize = Size(170, 84);
+  static const Size cardSize = Size(220, 84);
   static const double hGap = 40;
   static const double vGap = 70;
   static const double virtualSize = 100000;
+  static const double _drawerWidth = 420;
 
   final TransformationController _tc = TransformationController();
-  bool _didInitialCenter = false;
 
   static const double _minZoom = 0.3;
   static const double _maxZoom = 3.0;
+  static const double _snapRadius = 70.0;
 
-  double _zoomValue = 1.0;
+  bool _didInitialCenter = false;
   bool _syncingFromController = false;
+  double _zoomValue = 1.0;
 
-  // Linking state
   bool _isLinking = false;
   int? _linkFromNodeId;
   LinkPort? _linkPort;
   Offset _linkStartScene = Offset.zero;
   Offset _linkCurrentViewport = Offset.zero;
-
   int? _hoverTargetId;
   Offset _snappedEndViewport = Offset.zero;
 
-  static const double _snapRadius = 70.0;
-
   int? _hoveredNodeId;
+  int? _draggingNodeId;
   Map<int, Offset> _lastLayoutScene = {};
 
-  // Multi-select (Ctrl)
   final Set<int> _ctrlSelectedIds = <int>{};
 
-  final ScrollController _actionsCtrl = ScrollController();
-
-  // Auth-load
   StreamSubscription<User?>? _authSub;
   bool _loadedOnce = false;
+
+  _MemberFormDrawerRequest? _drawerRequest;
+  Completer<MemberFormResult>? _drawerCompleter;
+
+  bool get _isDrawerOpen => _drawerRequest != null;
 
   bool get _ctrlPressed {
     final kb = HardwareKeyboard.instance;
     return kb.isLogicalKeyPressed(LogicalKeyboardKey.controlLeft) ||
         kb.isLogicalKeyPressed(LogicalKeyboardKey.controlRight);
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    store = FamilyTreeStore();
+
+    Future.microtask(_ensureLoadedFromCloud);
+
+    _authSub = FirebaseAuth.instance.authStateChanges().listen((user) async {
+      if (!mounted) return;
+      if (user == null) return;
+      await _ensureLoadedFromCloud();
+    });
+
+    _tc.addListener(() {
+      if (!mounted || _syncingFromController) return;
+      final s = _tc.value.getMaxScaleOnAxis().clamp(_minZoom, _maxZoom);
+      if ((s - _zoomValue).abs() > 0.005) {
+        setState(() => _zoomValue = s);
+      }
+    });
+  }
+
+  @override
+  void dispose() {
+    if (_drawerCompleter != null && !_drawerCompleter!.isCompleted) {
+      _drawerCompleter!.complete(
+        const MemberFormResult(
+          saved: false,
+          name: null,
+          gender: Gender.female,
+          details: MemberDetails(),
+          birthday: null,
+          clearBirthday: false,
+          removePhoto: false,
+          newPhotoBytes: null,
+        ),
+      );
+    }
+
+    _authSub?.cancel();
+    store.dispose();
+    _tc.dispose();
+    super.dispose();
+  }
+
+  Future<void> _ensureLoadedFromCloud() async {
+    if (_loadedOnce) return;
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) return;
+
+    _loadedOnce = true;
+    try {
+      await store.loadFromCloud(treeId: 'default');
+      debugPrint('✅ RTDB loaded. nodes=${store.nodes.length}');
+    } catch (e) {
+      debugPrint('❌ loadFromCloud error: $e');
+      _loadedOnce = false;
+    }
   }
 
   void _toggleCtrlSelect(int id) {
@@ -145,55 +231,88 @@ class _FamilyTreeScreenState extends State<FamilyTreeScreen> {
     setState(() => _ctrlSelectedIds.clear());
   }
 
-  Future<void> _ensureLoadedFromCloud() async {
-    if (_loadedOnce) return;
-    final user = FirebaseAuth.instance.currentUser;
-    if (user == null) return;
-
-    _loadedOnce = true;
-    try {
-      await store.loadFromCloud(treeId: 'default');
-      debugPrint('✅ RTDB loaded. nodes=${store.nodes.length}');
-    } catch (e) {
-      debugPrint('❌ loadFromCloud error: $e');
-      _loadedOnce = false; // allow retry if it failed
+  Future<MemberFormResult> _openMemberFormDrawer({
+    required String title,
+    required bool showNameField,
+    required String? initialName,
+    required Gender initialGender,
+    required List<Gender> allowedGenders,
+    MemberDetails? initialDetails,
+    DateTime? initialBirthday,
+    Uint8List? initialPhotoBytes,
+    ImageProvider? initialPhotoProvider,
+    required bool allowRemovePhoto,
+    required bool allowClearBirthday,
+  }) async {
+    if (_drawerCompleter != null && !_drawerCompleter!.isCompleted) {
+      _drawerCompleter!.complete(
+        MemberFormResult(
+          saved: false,
+          name: null,
+          gender: initialGender,
+          details: initialDetails ?? const MemberDetails(),
+          birthday: initialBirthday,
+          clearBirthday: false,
+          removePhoto: false,
+          newPhotoBytes: null,
+        ),
+      );
     }
-  }
 
-  @override
-  void initState() {
-    super.initState();
-    store = FamilyTreeStore();
+    final completer = Completer<MemberFormResult>();
 
-    // If user already signed in, load immediately
-    Future.microtask(_ensureLoadedFromCloud);
-
-    // If auth arrives later, load once
-    _authSub = FirebaseAuth.instance.authStateChanges().listen((user) async {
-      if (!mounted) return;
-      if (user == null) return;
-      await _ensureLoadedFromCloud();
+    setState(() {
+      _drawerCompleter = completer;
+      _drawerRequest = _MemberFormDrawerRequest(
+        title: title,
+        showNameField: showNameField,
+        initialName: initialName,
+        initialGender: initialGender,
+        allowedGenders: allowedGenders,
+        initialDetails: initialDetails ?? const MemberDetails(),
+        initialBirthday: initialBirthday,
+        initialPhotoBytes: initialPhotoBytes,
+        initialPhotoProvider: initialPhotoProvider,
+        allowRemovePhoto: allowRemovePhoto,
+        allowClearBirthday: allowClearBirthday,
+      );
     });
 
-    // Keep slider in sync with controller
-    _tc.addListener(() {
-      if (!mounted) return;
-      if (_syncingFromController) return;
+    final result = await completer.future;
+    if (!mounted) return result;
 
-      final s = _tc.value.getMaxScaleOnAxis().clamp(_minZoom, _maxZoom);
-      if ((s - _zoomValue).abs() > 0.005) {
-        setState(() => _zoomValue = s);
-      }
+    setState(() {
+      _drawerRequest = null;
+      _drawerCompleter = null;
     });
+
+    return result;
   }
 
-  @override
-  void dispose() {
-    _authSub?.cancel();
-    store.dispose();
-    _tc.dispose();
-    _actionsCtrl.dispose();
-    super.dispose();
+  void _closeDrawerUnsaved() {
+    final completer = _drawerCompleter;
+    if (completer == null || completer.isCompleted) return;
+
+    final req = _drawerRequest;
+    completer.complete(
+      MemberFormResult(
+        saved: false,
+        name: req?.initialName,
+        gender: req?.initialGender ?? Gender.female,
+        details: req?.initialDetails ?? const MemberDetails(),
+        birthday: req?.initialBirthday,
+        clearBirthday: false,
+        removePhoto: false,
+        newPhotoBytes: null,
+      ),
+    );
+  }
+
+  void _saveDrawer(MemberFormResult result) {
+    final completer = _drawerCompleter;
+    if (completer != null && !completer.isCompleted) {
+      completer.complete(result);
+    }
   }
 
   void _setZoom(double newZoom) {
@@ -248,7 +367,7 @@ class _FamilyTreeScreenState extends State<FamilyTreeScreen> {
     }
 
     if (bestId == null) return null;
-    return (bestDist <= _snapRadius) ? bestId : null;
+    return bestDist <= _snapRadius ? bestId : null;
   }
 
   void _startLink({
@@ -309,6 +428,8 @@ class _FamilyTreeScreenState extends State<FamilyTreeScreen> {
     final port = _linkPort;
     final targetId = _hoverTargetId;
 
+    final beforePositions = Map<int, Offset>.from(_lastLayoutScene);
+
     setState(() {
       _isLinking = false;
       _linkFromNodeId = null;
@@ -316,8 +437,7 @@ class _FamilyTreeScreenState extends State<FamilyTreeScreen> {
       _hoverTargetId = null;
     });
 
-    if (fromId == null || port == null) return;
-    if (targetId == null) return;
+    if (fromId == null || port == null || targetId == null) return;
 
     bool ok = false;
 
@@ -338,7 +458,25 @@ class _FamilyTreeScreenState extends State<FamilyTreeScreen> {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Cannot connect these tiles (rules blocked).')),
       );
+      return;
     }
+
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+
+      final afterPositions = Map<int, Offset>.from(_lastLayoutScene);
+
+      for (final id in beforePositions.keys) {
+        final before = beforePositions[id];
+        final after = afterPositions[id];
+        if (before == null || after == null) continue;
+
+        final delta = before - after;
+        if (delta.distance > 0.5) {
+          store.addManualOffset(id, delta);
+        }
+      }
+    });
   }
 
   Future<void> _handlePortTap(int nodeId, LinkPort port) async {
@@ -366,72 +504,45 @@ class _FamilyTreeScreenState extends State<FamilyTreeScreen> {
   }
 
   Future<void> _logout() async {
+    final navigator = Navigator.of(context);
+    final messenger = ScaffoldMessenger.of(context);
+
     final ok = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
         title: const Text('Log out?'),
-        content: const Text('You will be signed out. Your saved tree will remain in the database.'),
+        content: const Text(
+          'You will be signed out. Your saved tree will remain in the database.',
+        ),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
-          FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Log out')),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Log out'),
+          ),
         ],
       ),
     );
 
-    if (!mounted) return;
-    if (ok != true) return;
+    if (!mounted || ok != true) return;
 
     try {
       await authService.value.signOut();
-      // or: await FirebaseAuth.instance.signOut();
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Logout failed: $e')),
-      );
+      messenger.showSnackBar(SnackBar(content: Text('Logout failed: $e')));
       return;
     }
 
     if (!mounted) return;
-
-    Navigator.of(context).pushNamedAndRemoveUntil(
-      LoginPage.route,
-      (route) => false,
-    );
-  }
-
-  Future<String?> _promptText({required String title, required String initial}) async {
-    final c = TextEditingController(text: initial);
-
-    final res = await showDialog<String>(
-      context: context,
-      builder: (ctx) {
-        return AlertDialog(
-          title: Text(title),
-          content: TextField(
-            controller: c,
-            autofocus: true,
-            decoration: const InputDecoration(
-              hintText: 'Enter name',
-              border: OutlineInputBorder(),
-            ),
-            onSubmitted: (_) => Navigator.pop(ctx, c.text),
-          ),
-          actions: [
-            TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
-            FilledButton(onPressed: () => Navigator.pop(ctx, c.text), child: const Text('Save')),
-          ],
-        );
-      },
-    );
-
-    c.dispose();
-    return res;
+    navigator.pushNamedAndRemoveUntil(LoginPage.route, (route) => false);
   }
 
   Future<void> _applyFormToNode(int nodeId, MemberFormResult r) async {
     debugPrint('APPLY FORM CALLED nodeId=$nodeId saved=${r.saved}');
-
     if (!r.saved) return;
 
     store.setGender(nodeId, r.gender);
@@ -449,7 +560,7 @@ class _FamilyTreeScreenState extends State<FamilyTreeScreen> {
     }
 
     if (r.newPhotoBytes != null) {
-      debugPrint('Uploading photo for node $nodeId ...');
+      final messenger = ScaffoldMessenger.of(context);
 
       try {
         final photoUrl = await _cloudinary.uploadBytes(
@@ -457,18 +568,17 @@ class _FamilyTreeScreenState extends State<FamilyTreeScreen> {
           fileName: 'node_$nodeId.jpg',
         );
 
-        debugPrint('Upload success: $photoUrl');
+        if (!mounted) return;
         store.setPhotoUrl(nodeId, photoUrl);
       } catch (e) {
-        debugPrint('Cloudinary upload failed: $e');
-
         if (!mounted) return;
-        ScaffoldMessenger.of(context).showSnackBar(
+        messenger.showSnackBar(
           SnackBar(content: Text('Photo upload failed: $e')),
         );
       }
     }
   }
+
   Future<void> _editDetailsFlow(int nodeId) async {
     final n = store.getNode(nodeId);
     final initial = MemberDetails(
@@ -482,20 +592,27 @@ class _FamilyTreeScreenState extends State<FamilyTreeScreen> {
       tiktok: n.tiktok,
     );
 
-    final r = await MemberFormSheet(context).open(
-      showNameField: false,
-      initialName: null,
+    final r = await _openMemberFormDrawer(
+      title: 'Edit Member Details',
+      showNameField: true,
+      initialName: n.name,
       initialGender: n.gender,
       allowedGenders: const [Gender.female, Gender.male],
       initialDetails: initial,
       initialBirthday: n.birthday,
       initialPhotoBytes: n.photoBytes,
+      initialPhotoProvider: n.hasPhoto ? n.photoProvider : null,
       allowRemovePhoto: true,
       allowClearBirthday: true,
-      title: 'View / Edit Details',
     );
 
-    if (!mounted) return;
+    if (!mounted || !r.saved) return;
+
+    final newName = (r.name ?? '').trim();
+    if (newName.isNotEmpty && newName != n.name) {
+      store.renameNode(nodeId, newName);
+    }
+
     await _applyFormToNode(nodeId, r);
   }
 
@@ -510,46 +627,40 @@ class _FamilyTreeScreenState extends State<FamilyTreeScreen> {
   Future<String?> _uploadPhotoIfNeeded(Uint8List? bytes, String filePrefix) async {
     if (bytes == null) return null;
 
-    try {
-      debugPrint('Uploading photo to Cloudinary...');
+    final messenger = ScaffoldMessenger.of(context);
 
+    try {
       final url = await _cloudinary.uploadBytes(
         bytes,
         fileName: '${filePrefix}_${DateTime.now().millisecondsSinceEpoch}.jpg',
       );
-
-      debugPrint('Upload success: $url');
       return url;
     } catch (e) {
-      debugPrint('Cloudinary upload failed: $e');
-
       if (!mounted) return null;
-
-      ScaffoldMessenger.of(context).showSnackBar(
+      messenger.showSnackBar(
         SnackBar(content: Text('Photo upload failed: $e')),
       );
       return null;
     }
   }
 
-
   Future<void> _addFirstMemberFlow() async {
-    final r = await MemberFormSheet(context).open(
+    final r = await _openMemberFormDrawer(
+      title: 'Add Member Info',
       showNameField: true,
       initialName: 'New Member',
       initialGender: Gender.female,
       allowedGenders: const [Gender.female, Gender.male],
-      title: 'Add Member Info',
       allowRemovePhoto: false,
       allowClearBirthday: true,
     );
-    if (!mounted) return;
-    if (!r.saved) return;
+    if (!mounted || !r.saved) return;
 
     final name = (r.name ?? '').trim();
     if (name.isEmpty) return;
 
     final photoUrl = await _uploadPhotoIfNeeded(r.newPhotoBytes, 'member');
+    if (!mounted) return;
 
     store.addRoot(
       name: name,
@@ -569,22 +680,22 @@ class _FamilyTreeScreenState extends State<FamilyTreeScreen> {
   }
 
   Future<void> _addStandaloneMemberFlow() async {
-    final r = await MemberFormSheet(context).open(
+    final r = await _openMemberFormDrawer(
+      title: 'Add Member Info',
       showNameField: true,
       initialName: 'New Member',
       initialGender: Gender.female,
       allowedGenders: const [Gender.female, Gender.male],
-      title: 'Add Member Info',
       allowRemovePhoto: false,
       allowClearBirthday: true,
     );
-    if (!mounted) return;
-    if (!r.saved) return;
+    if (!mounted || !r.saved) return;
 
     final name = (r.name ?? '').trim();
     if (name.isEmpty) return;
 
     final photoUrl = await _uploadPhotoIfNeeded(r.newPhotoBytes, 'member');
+    if (!mounted) return;
 
     store.addStandalone(
       name: name,
@@ -603,8 +714,10 @@ class _FamilyTreeScreenState extends State<FamilyTreeScreen> {
     );
   }
 
-  // ✅ Read-only details popup for non-owners
-  Future<void> _showDetailsPopup(int nodeId) async {
+  Future<void> _showDetailsPopup({
+    required int nodeId,
+    required Offset globalTapPosition,
+  }) async {
     final node = store.getNode(nodeId);
 
     String? line(String label, String? value) {
@@ -627,24 +740,36 @@ class _FamilyTreeScreenState extends State<FamilyTreeScreen> {
       ].whereType<String>(),
     ];
 
-    await showModalBottomSheet(
+    final overlay = Overlay.of(context).context.findRenderObject() as RenderBox;
+
+    final position = RelativeRect.fromRect(
+      Rect.fromLTWH(globalTapPosition.dx, globalTapPosition.dy, 1, 1),
+      Offset.zero & overlay.size,
+    );
+
+    await showMenu<String>(
       context: context,
-      backgroundColor: Colors.transparent,
-      enableDrag: true,
-      isScrollControlled: true,
-      builder: (ctx) {
-        return SafeArea(
+      position: position,
+      color: Colors.transparent,
+      elevation: 0,
+      constraints: const BoxConstraints(minWidth: 300, maxWidth: 340),
+      items: [
+        PopupMenuItem<String>(
+          value: '__details__',
+          enabled: false,
+          padding: EdgeInsets.zero,
           child: Container(
-            margin: const EdgeInsets.all(16),
+            width: 320,
             padding: const EdgeInsets.all(16),
             decoration: BoxDecoration(
               color: Colors.white,
               borderRadius: BorderRadius.circular(24),
+              border: Border.all(color: const Color(0xFFE7EAF0)),
               boxShadow: [
                 BoxShadow(
-                  color: Colors.black.withValues(alpha: 0.12),
+                  color: Colors.black.withAlpha(31),
                   blurRadius: 18,
-                  offset: const Offset(0, 6),
+                  offset: const Offset(0, 8),
                 ),
               ],
             ),
@@ -678,7 +803,10 @@ class _FamilyTreeScreenState extends State<FamilyTreeScreen> {
                         children: [
                           Text(
                             node.name,
-                            style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w700),
+                            style: const TextStyle(
+                              fontSize: 18,
+                              fontWeight: FontWeight.w700,
+                            ),
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis,
                           ),
@@ -687,20 +815,14 @@ class _FamilyTreeScreenState extends State<FamilyTreeScreen> {
                             children: [
                               Icon(node.gender.icon, size: 14, color: Colors.grey.shade600),
                               const SizedBox(width: 4),
-                              Text(
-                                node.gender.label,
-                                style: TextStyle(color: Colors.grey.shade600, fontSize: 12),
-                              ),
-                              const SizedBox(width: 8),
-                              Container(
-                                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-                                decoration: BoxDecoration(
-                                  color: Colors.grey.shade100,
-                                  borderRadius: BorderRadius.circular(999),
-                                ),
+                              Flexible(
                                 child: Text(
-                                  'Read-only',
-                                  style: TextStyle(color: Colors.grey.shade700, fontSize: 12),
+                                  node.gender.label,
+                                  style: TextStyle(
+                                    color: Colors.grey.shade600,
+                                    fontSize: 12,
+                                  ),
+                                  overflow: TextOverflow.ellipsis,
                                 ),
                               ),
                             ],
@@ -708,13 +830,9 @@ class _FamilyTreeScreenState extends State<FamilyTreeScreen> {
                         ],
                       ),
                     ),
-                    IconButton(
-                      icon: const Icon(Icons.close),
-                      onPressed: () => Navigator.pop(ctx),
-                    ),
                   ],
                 ),
-                const SizedBox(height: 12),
+                const SizedBox(height: 14),
                 if (lines.isEmpty)
                   Text(
                     'No additional details provided.',
@@ -723,7 +841,7 @@ class _FamilyTreeScreenState extends State<FamilyTreeScreen> {
                 else
                   ConstrainedBox(
                     constraints: BoxConstraints(
-                      maxHeight: MediaQuery.of(ctx).size.height * 0.55,
+                      maxHeight: MediaQuery.of(context).size.height * 0.42,
                     ),
                     child: SingleChildScrollView(
                       child: Column(
@@ -732,30 +850,27 @@ class _FamilyTreeScreenState extends State<FamilyTreeScreen> {
                           for (final t in lines)
                             Padding(
                               padding: const EdgeInsets.only(bottom: 10),
-                              child: Text(t, style: const TextStyle(fontSize: 14, height: 1.25)),
+                              child: Text(
+                                t,
+                                style: const TextStyle(fontSize: 14, height: 1.25),
+                              ),
                             ),
                         ],
                       ),
                     ),
                   ),
-                const SizedBox(height: 10),
-                Align(
-                  alignment: Alignment.centerRight,
-                  child: FilledButton.icon(
-                    onPressed: () => Navigator.pop(ctx),
-                    icon: const Icon(Icons.check),
-                    label: const Text('Done'),
-                  ),
-                ),
               ],
             ),
           ),
-        );
-      },
+        ),
+      ],
     );
   }
 
-  Future<void> _openNodeActions(int nodeId) async {
+  Future<void> _openNodeActions({
+    required int nodeId,
+    required Offset globalTapPosition,
+  }) async {
     if (_ctrlSelectedIds.isNotEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Selection active. Ctrl+Click tiles to unselect first.')),
@@ -763,254 +878,221 @@ class _FamilyTreeScreenState extends State<FamilyTreeScreen> {
       return;
     }
 
-    // ✅ Not owner -> show read-only details instead of edit options
     if (!store.canEditNodeId(nodeId)) {
-      await _showDetailsPopup(nodeId);
+      await _showDetailsPopup(
+        nodeId: nodeId,
+        globalTapPosition: globalTapPosition,
+      );
       return;
     }
 
     final node = store.getNode(nodeId);
+    final overlay = Overlay.of(context).context.findRenderObject() as RenderBox;
 
-    await showModalBottomSheet(
+    final position = RelativeRect.fromRect(
+      Rect.fromLTWH(globalTapPosition.dx, globalTapPosition.dy, 1, 1),
+      Offset.zero & overlay.size,
+    );
+
+    final selected = await showMenu<String>(
       context: context,
-      backgroundColor: Colors.transparent,
-      enableDrag: true,
-      isScrollControlled: false,
-      builder: (ctx) {
-        return Container(
-          margin: const EdgeInsets.all(16),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.end,
-            children: [
-              Align(
-                alignment: Alignment.topRight,
-                child: GestureDetector(
-                  onTap: () => Navigator.pop(ctx),
-                  child: Container(
-                    width: 40,
-                    height: 40,
-                    decoration: BoxDecoration(
-                      color: Colors.white,
-                      shape: BoxShape.circle,
-                      boxShadow: [
-                        BoxShadow(
-                          color: Colors.black.withValues(alpha: 0.1),
-                          blurRadius: 8,
-                          offset: const Offset(0, 2),
-                        ),
-                      ],
-                    ),
-                    child: const Icon(Icons.close, color: Colors.black54),
-                  ),
+      position: position,
+      color: Colors.transparent,
+      elevation: 0,
+      constraints: const BoxConstraints(minWidth: 300, maxWidth: 340),
+      items: [
+        PopupMenuItem<String>(
+          value: '__actions__',
+          enabled: false,
+          padding: EdgeInsets.zero,
+          child: Container(
+            width: 320,
+            padding: const EdgeInsets.all(16),
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(24),
+              border: Border.all(color: const Color(0xFFE7EAF0)),
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.black.withAlpha(31),
+                  blurRadius: 18,
+                  offset: const Offset(0, 8),
                 ),
-              ),
-              const SizedBox(height: 12),
-              Container(
-                padding: const EdgeInsets.all(16),
-                decoration: BoxDecoration(
-                  color: Colors.white,
-                  borderRadius: BorderRadius.circular(24),
-                  boxShadow: [
-                    BoxShadow(
-                      color: Colors.black.withValues(alpha: 0.1),
-                      blurRadius: 16,
-                      offset: const Offset(0, 4),
-                    ),
-                  ],
-                ),
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
+              ],
+            ),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Row(
                   children: [
-                    Padding(
-                      padding: const EdgeInsets.only(bottom: 16),
-                      child: Row(
-                        children: [
-                          GestureDetector(
-                            onTap: node.hasPhoto ? () => _viewPhotoFullScreen(node) : null,
-                            child: Container(
-                              width: 50,
-                              height: 50,
-                              decoration: BoxDecoration(
-                                shape: BoxShape.circle,
-                                color: !node.hasPhoto ? node.gender.tone : null,
-                                border: Border.all(color: Colors.grey.shade300, width: 1),
+                    GestureDetector(
+                      onTap: node.hasPhoto ? () => _viewPhotoFullScreen(node) : null,
+                      child: Container(
+                        width: 50,
+                        height: 50,
+                        decoration: BoxDecoration(
+                          shape: BoxShape.circle,
+                          color: !node.hasPhoto ? node.gender.tone : null,
+                          border: Border.all(color: Colors.grey.shade300, width: 1),
+                        ),
+                        child: !node.hasPhoto
+                            ? Icon(node.gender.icon, size: 24, color: Colors.grey.shade700)
+                            : ClipOval(
+                                child: Image(image: node.photoProvider, fit: BoxFit.cover),
                               ),
-                              child: !node.hasPhoto
-                                  ? Icon(node.gender.icon, size: 24, color: Colors.grey.shade700)
-                                  : ClipOval(
-                                      child: Image(image: node.photoProvider, fit: BoxFit.cover),
-                                    ),
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            node.name,
+                            style: const TextStyle(
+                              fontSize: 16,
+                              fontWeight: FontWeight.w700,
                             ),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
                           ),
-                          const SizedBox(width: 12),
-                          Expanded(
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Text(
-                                  node.name,
-                                  style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
-                                  maxLines: 1,
+                          const SizedBox(height: 4),
+                          Row(
+                            children: [
+                              Icon(node.gender.icon, size: 14, color: Colors.grey.shade600),
+                              const SizedBox(width: 4),
+                              Flexible(
+                                child: Text(
+                                  node.gender.label,
+                                  style: TextStyle(
+                                    color: Colors.grey.shade600,
+                                    fontSize: 12,
+                                  ),
                                   overflow: TextOverflow.ellipsis,
                                 ),
-                                const SizedBox(height: 4),
-                                Row(
-                                  children: [
-                                    Icon(node.gender.icon, size: 14, color: Colors.grey.shade600),
-                                    const SizedBox(width: 4),
-                                    Text(
-                                      node.gender.label,
-                                      style:
-                                          TextStyle(color: Colors.grey.shade600, fontSize: 12),
+                              ),
+                              if (node.birthday != null) ...[
+                                const SizedBox(width: 8),
+                                const Icon(Icons.cake_outlined, size: 14),
+                                const SizedBox(width: 4),
+                                Flexible(
+                                  child: Text(
+                                    formatDate(node.birthday!),
+                                    style: TextStyle(
+                                      color: Colors.grey.shade600,
+                                      fontSize: 12,
                                     ),
-                                    if (node.birthday != null) ...[
-                                      const SizedBox(width: 10),
-                                      const Icon(Icons.cake_outlined, size: 14),
-                                      const SizedBox(width: 4),
-                                      Flexible(
-                                        child: Text(
-                                          formatDate(node.birthday!),
-                                          style: TextStyle(
-                                              color: Colors.grey.shade600, fontSize: 12),
-                                          overflow: TextOverflow.ellipsis,
-                                        ),
-                                      ),
-                                    ],
-                                  ],
+                                    overflow: TextOverflow.ellipsis,
+                                  ),
                                 ),
                               ],
-                            ),
+                            ],
                           ),
                         ],
                       ),
                     ),
-                    SizedBox(
-                      height: 120,
-                      child: Scrollbar(
-                        controller: _actionsCtrl,
-                        thumbVisibility: true,
-                        child: ListView(
-                          controller: _actionsCtrl,
-                          scrollDirection: Axis.horizontal,
-                          physics: const BouncingScrollPhysics(),
-                          padding: const EdgeInsets.only(left: 4, right: 20),
-                          children: [
-                            HorizontalActionTile(
-                              icon: Icons.badge_outlined,
-                              title: 'Details',
-                              subtitle: 'View / Edit',
-                              color: Colors.indigo,
-                              onTap: () async {
-                                Navigator.pop(ctx);
-                                await _editDetailsFlow(nodeId);
-                              },
-                            ),
-                            HorizontalActionTile(
-                              icon: Icons.edit,
-                              title: 'Edit',
-                              subtitle: 'Name',
-                              color: Colors.green,
-                              onTap: () async {
-                                Navigator.pop(ctx);
-                                final name = await _promptText(
-                                    title: 'Edit Name', initial: node.name);
-                                if (!mounted) return;
-                                if (name != null) store.renameNode(nodeId, name);
-                              },
-                            ),
-                            HorizontalActionTile(
-                              icon: Icons.favorite,
-                              title: 'Add',
-                              subtitle: 'Spouse',
-                              color: Colors.pink,
-                              enabled: node.spouses.isEmpty,
-                              onTap: () async {
-                                Navigator.pop(ctx);
-                                await _addSpouseFlow(personId: nodeId);
-                              },
-                            ),
-                            HorizontalActionTile(
-                              icon: Icons.arrow_upward,
-                              title: 'Add',
-                              subtitle: 'Parent',
-                              color: Colors.purple,
-                              enabled: node.parents.length < 2,
-                              onTap: () async {
-                                Navigator.pop(ctx);
-                                await _addParentFlow(personId: nodeId);
-                              },
-                            ),
-                            HorizontalActionTile(
-                              icon: Icons.arrow_downward,
-                              title: 'Add',
-                              subtitle: 'Child',
-                              color: Colors.teal,
-                              onTap: () async {
-                                Navigator.pop(ctx);
-                                await _addChildFlow(fromNodeId: nodeId);
-                              },
-                            ),
-                            HorizontalActionTile(
-                              icon: Icons.delete,
-                              title: 'Delete',
-                              subtitle: 'Member',
-                              color: Colors.red,
-                              onTap: () async {
-                                Navigator.pop(ctx);
-
-                                final ok = await showDialog<bool>(
-                                  context: context,
-                                  builder: (dctx) => AlertDialog(
-                                    title: const Text('Delete member?'),
-                                    content: const Text(
-                                        'This will remove the member and all related links.'),
-                                    actions: [
-                                      TextButton(
-                                        onPressed: () => Navigator.pop(dctx, false),
-                                        child: const Text('Cancel'),
-                                      ),
-                                      FilledButton(
-                                        style: FilledButton.styleFrom(
-                                            backgroundColor: Colors.redAccent),
-                                        onPressed: () => Navigator.pop(dctx, true),
-                                        child: const Text('Delete'),
-                                      ),
-                                    ],
-                                  ),
-                                );
-
-                                if (!mounted) return;
-                                if (ok == true) store.deleteNode(nodeId);
-                              },
-                            ),
-                          ],
-                        ),
-                      ),
-                    ),
-                    const SizedBox(height: 8),
                   ],
                 ),
+                const SizedBox(height: 16),
+                Wrap(
+                  spacing: 10,
+                  runSpacing: 10,
+                  children: [
+                    _PopupActionButton(
+                      icon: Icons.badge_outlined,
+                      label: 'Edit Details',
+                      color: Colors.indigo,
+                      onTap: () => Navigator.pop(context, 'details'),
+                    ),
+                    _PopupActionButton(
+                      icon: Icons.favorite,
+                      label: 'Add Spouse',
+                      color: Colors.pink,
+                      enabled: node.spouses.isEmpty,
+                      onTap: () => Navigator.pop(context, 'spouse'),
+                    ),
+                    _PopupActionButton(
+                      icon: Icons.person,
+                      label: 'Add Parent',
+                      color: Colors.purple,
+                      enabled: node.parents.length < 2,
+                      onTap: () => Navigator.pop(context, 'parent'),
+                    ),
+                    _PopupActionButton(
+                      icon: Icons.child_care,
+                      label: 'Add Child',
+                      color: Colors.teal,
+                      onTap: () => Navigator.pop(context, 'child'),
+                    ),
+                    _PopupActionButton(
+                      icon: Icons.delete,
+                      label: 'Delete',
+                      color: Colors.red,
+                      onTap: () => Navigator.pop(context, 'delete'),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+        ),
+      ],
+    );
+
+    if (!mounted || selected == null) return;
+
+    switch (selected) {
+      case 'details':
+        await _editDetailsFlow(nodeId);
+        break;
+      case 'spouse':
+        await _addSpouseFlow(personId: nodeId);
+        break;
+      case 'parent':
+        await _addParentFlow(personId: nodeId);
+        break;
+      case 'child':
+        await _addChildFlow(fromNodeId: nodeId);
+        break;
+      case 'delete':
+        final ok = await showDialog<bool>(
+          context: context,
+          builder: (dctx) => AlertDialog(
+            title: const Text('Delete member?'),
+            content: const Text('This will remove the member and all related links.'),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(dctx, false),
+                child: const Text('Cancel'),
+              ),
+              FilledButton(
+                style: FilledButton.styleFrom(backgroundColor: Colors.redAccent),
+                onPressed: () => Navigator.pop(dctx, true),
+                child: const Text('Delete'),
               ),
             ],
           ),
         );
-      },
-    );
+
+        if (!mounted) return;
+        if (ok == true) store.deleteNode(nodeId);
+        break;
+    }
   }
 
   Future<void> _addSpouseFlow({required int personId}) async {
+    final messenger = ScaffoldMessenger.of(context);
     final person = store.getNode(personId);
 
     if (person.spouses.isNotEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
+      messenger.showSnackBar(
         SnackBar(content: Text('${person.name} already has a spouse.')),
       );
       return;
     }
 
     if (store.hasCoParentViaChildren(personId)) {
-      ScaffoldMessenger.of(context).showSnackBar(
+      messenger.showSnackBar(
         SnackBar(content: Text('${person.name} already has a co-parent.')),
       );
       return;
@@ -1018,22 +1100,22 @@ class _FamilyTreeScreenState extends State<FamilyTreeScreen> {
 
     final spouseGender = person.gender.opposite;
 
-    final r = await MemberFormSheet(context).open(
+    final r = await _openMemberFormDrawer(
+      title: 'Add Spouse Info',
       showNameField: true,
       initialName: 'New Spouse',
       initialGender: spouseGender,
       allowedGenders: [spouseGender],
-      title: 'Add Spouse Info',
       allowRemovePhoto: false,
       allowClearBirthday: true,
     );
-    if (!mounted) return;
-    if (!r.saved) return;
+    if (!mounted || !r.saved) return;
 
     final name = (r.name ?? '').trim();
     if (name.isEmpty) return;
 
     final photoUrl = await _uploadPhotoIfNeeded(r.newPhotoBytes, 'spouse');
+    if (!mounted) return;
 
     final added = store.addSpouse(
       personId: personId,
@@ -1052,17 +1134,18 @@ class _FamilyTreeScreenState extends State<FamilyTreeScreen> {
     );
 
     if (added == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
+      messenger.showSnackBar(
         const SnackBar(content: Text('Could not add spouse.')),
       );
     }
   }
 
   Future<void> _addParentFlow({required int personId}) async {
+    final messenger = ScaffoldMessenger.of(context);
     final person = store.getNode(personId);
 
     if (person.parents.length >= 2) {
-      ScaffoldMessenger.of(context).showSnackBar(
+      messenger.showSnackBar(
         SnackBar(content: Text('${person.name} already has 2 parents.')),
       );
       return;
@@ -1076,28 +1159,28 @@ class _FamilyTreeScreenState extends State<FamilyTreeScreen> {
     ];
 
     if (options.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
+      messenger.showSnackBar(
         SnackBar(content: Text('${person.name} already has 2 parents.')),
       );
       return;
     }
 
-    final r = await MemberFormSheet(context).open(
+    final r = await _openMemberFormDrawer(
+      title: 'Add Parent Info',
       showNameField: true,
       initialName: 'New Parent',
       initialGender: options.first,
       allowedGenders: options,
-      title: 'Add Parent Info',
       allowRemovePhoto: false,
       allowClearBirthday: true,
     );
-    if (!mounted) return;
-    if (!r.saved) return;
+    if (!mounted || !r.saved) return;
 
     final name = (r.name ?? '').trim();
     if (name.isEmpty) return;
 
     final photoUrl = await _uploadPhotoIfNeeded(r.newPhotoBytes, 'parent');
+    if (!mounted) return;
 
     final added = store.addParent(
       personId: personId,
@@ -1117,29 +1200,29 @@ class _FamilyTreeScreenState extends State<FamilyTreeScreen> {
     );
 
     if (added == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
+      messenger.showSnackBar(
         const SnackBar(content: Text('Could not add parent (blocked).')),
       );
     }
   }
 
   Future<void> _addChildFlow({required int fromNodeId}) async {
-    final r = await MemberFormSheet(context).open(
+    final r = await _openMemberFormDrawer(
+      title: 'Add Child Info',
       showNameField: true,
       initialName: 'New Child',
       initialGender: Gender.female,
       allowedGenders: const [Gender.female, Gender.male],
-      title: 'Add Child Info',
       allowRemovePhoto: false,
       allowClearBirthday: true,
     );
-    if (!mounted) return;
-    if (!r.saved) return;
+    if (!mounted || !r.saved) return;
 
     final name = (r.name ?? '').trim();
     if (name.isEmpty) return;
 
     final photoUrl = await _uploadPhotoIfNeeded(r.newPhotoBytes, 'child');
+    if (!mounted) return;
 
     store.addChild(
       fromNodeId: fromNodeId,
@@ -1171,7 +1254,6 @@ class _FamilyTreeScreenState extends State<FamilyTreeScreen> {
           vGap: vGap,
         ).compute();
 
-        // Center everything in a big virtual canvas
         final origin = const Offset(virtualSize / 2, virtualSize / 2);
         final layout = <int, Offset>{
           for (final e in layoutRaw.entries) e.key: e.value + origin,
@@ -1193,135 +1275,162 @@ class _FamilyTreeScreenState extends State<FamilyTreeScreen> {
         final isEmpty = store.nodes.isEmpty;
 
         return Scaffold(
+          backgroundColor: const Color(0xFFF5F5F5),
+          
           appBar: AppBar(
-            title: const Text('Family Tree Builder'),
+              surfaceTintColor: Colors.transparent,
+
+            title: const Text('Camello Family Tree'),
             actions: [
               IconButton(
                 tooltip: 'Log out',
-                onPressed: _logout,
+                onPressed: _logout, 
                 icon: const Icon(Icons.logout),
               ),
             ],
           ),
           body: Stack(
             children: [
-              GestureDetector(
-                behavior: HitTestBehavior.translucent,
-                onTapDown: (_) {
-                  if (_isLinking) return;
-                  if (_ctrlPressed) return;
-                  _clearCtrlSelection();
-                },
-                child: InteractiveViewer(
-                  transformationController: _tc,
-                  constrained: false,
-                  boundaryMargin: const EdgeInsets.all(1000000),
-                  clipBehavior: Clip.none,
-                  minScale: _minZoom,
-                  maxScale: _maxZoom,
-                  child: SizedBox(
-                    width: canvasSize.width,
-                    height: canvasSize.height,
-                    child: Stack(
-                      clipBehavior: Clip.none,
-                      children: [
-                        if (!isEmpty)
-                          CustomPaint(
-                            size: canvasSize,
-                            painter: ConnectorPainter(
-                              store: store,
-                              positions: layout,
-                              cardSize: cardSize,
+              AnimatedPositioned(
+                duration: const Duration(milliseconds: 320),
+                curve: Curves.easeOutQuart,
+                left: _isDrawerOpen ? _drawerWidth : 0,
+                top: 0,
+                right: 0,
+                bottom: 0,
+                child: GestureDetector(
+                  behavior: HitTestBehavior.translucent,
+                  onTapDown: (_) {
+                    if (_isLinking) return;
+                    if (_ctrlPressed) return;
+                    _clearCtrlSelection();
+                  },
+                  child: InteractiveViewer(
+                    transformationController: _tc,
+                    constrained: false,
+                    boundaryMargin: const EdgeInsets.all(1000000),
+                    clipBehavior: Clip.none,
+                    minScale: _minZoom,
+                    maxScale: _maxZoom,
+                    child: SizedBox(
+                      width: canvasSize.width,
+                      height: canvasSize.height,
+                      child: Stack(
+                        clipBehavior: Clip.none,
+                        children: [
+                          if (!isEmpty)
+                            CustomPaint(
+                              size: canvasSize,
+                              painter: ConnectorPainter(
+                                store: store,
+                                positions: layout,
+                                cardSize: cardSize,
+                              ),
                             ),
-                          ),
-                        for (final entry in layout.entries)
-                          AnimatedNode(
-                            node: store.getNode(entry.key),
-                            topLeft: entry.value,
-                            size: cardSize,
-                            isSelected: _ctrlSelectedIds.contains(entry.key),
-                            isHovered: _ctrlSelectedIds.contains(entry.key) ||
-                                entry.key == _hoveredNodeId ||
-                                (_isLinking && _linkFromNodeId == entry.key),
-                            dragEnabled: !_isLinking,
-                            showPortsEnabled: store.canEditNodeId(entry.key),
-                            onHoverChanged: (hovering) {
-                              if (!mounted) return;
-                              setState(() {
-                                if (hovering) {
-                                  _hoveredNodeId = entry.key;
-                                } else if (_hoveredNodeId == entry.key) {
-                                  _hoveredNodeId = null;
+                          for (final entry in layout.entries)
+                            AnimatedNode(
+                              node: store.getNode(entry.key),
+                              topLeft: entry.value,
+                              size: cardSize,
+                              isSelected: _ctrlSelectedIds.contains(entry.key),
+                              isHovered: _ctrlSelectedIds.contains(entry.key) ||
+                                  entry.key == _hoveredNodeId ||
+                                  (_isLinking && _linkFromNodeId == entry.key),
+                              isDragging: _draggingNodeId == entry.key,
+                              dragEnabled: !_isLinking,
+                              showPortsEnabled: store.canEditNodeId(entry.key),
+                              onHoverChanged: (hovering) {
+                                if (!mounted) return;
+                                setState(() {
+                                  if (hovering) {
+                                    _hoveredNodeId = entry.key;
+                                  } else if (_hoveredNodeId == entry.key) {
+                                    _hoveredNodeId = null;
+                                  }
+                                });
+                              },
+                              onTapSelect: (id, globalPosition) {
+                                if (_isLinking) return;
+
+                                if (_ctrlPressed) {
+                                  _toggleCtrlSelect(id);
+                                  return;
                                 }
-                              });
-                            },
-                            onTapSelect: (id) {
-                              if (_isLinking) return;
 
-                              if (_ctrlPressed) {
-                                _toggleCtrlSelect(id);
-                                return;
-                              }
+                                if (_ctrlSelectedIds.isNotEmpty) {
+                                  ScaffoldMessenger.of(context).showSnackBar(
+                                    const SnackBar(
+                                      content: Text(
+                                        'Selection active. Ctrl+Click tiles to unselect.',
+                                      ),
+                                    ),
+                                  );
+                                  return;
+                                }
 
-                              if (_ctrlSelectedIds.isNotEmpty) {
-                                ScaffoldMessenger.of(context).showSnackBar(
-                                  const SnackBar(
-                                    content: Text('Selection active. Ctrl+Click tiles to unselect.'),
-                                  ),
+                                _openNodeActions(
+                                  nodeId: id,
+                                  globalTapPosition: globalPosition,
                                 );
-                                return;
-                              }
+                              },
+                              onDragStart: () {
+                                if (_isLinking) return;
 
-                              _openNodeActions(id);
-                            },
-                            onDragStart: () {
-                              if (_isLinking) return;
+                                setState(() => _draggingNodeId = entry.key);
 
-                              if (_ctrlPressed && !_ctrlSelectedIds.contains(entry.key)) {
-                                _toggleCtrlSelect(entry.key);
-                              }
-                            },
-                            onDragEnd: () {},
-                            onDragDelta: (delta) {
-                              if (_isLinking) return;
+                                if (_ctrlPressed && !_ctrlSelectedIds.contains(entry.key)) {
+                                  _toggleCtrlSelect(entry.key);
+                                }
+                              },
+                              onDragEnd: () {
+                                if (!mounted) return;
+                                setState(() => _draggingNodeId = null);
+                              },
+                              onDragDelta: (delta) {
+                                if (_isLinking) return;
 
-                              final draggedId = entry.key;
-                              final ids = (_ctrlSelectedIds.isNotEmpty &&
-                                      _ctrlSelectedIds.contains(draggedId))
-                                  ? _ctrlSelectedIds
-                                  : <int>{draggedId};
+                                final draggedId = entry.key;
+                                final ids = (_ctrlSelectedIds.isNotEmpty &&
+                                        _ctrlSelectedIds.contains(draggedId))
+                                    ? _ctrlSelectedIds
+                                    : <int>{draggedId};
 
-                              if (ids.length == 1) {
-                                store.addManualOffset(draggedId, delta);
-                              } else {
-                                store.addManualOffsetBulk(ids, delta);
-                              }
-                            },
-                            onStartPortDrag: (port, globalStart) {
-                              final topLeft = layout[entry.key]!;
-                              final startScene = switch (port) {
-                                LinkPort.parentTop =>
-                                  Offset(topLeft.dx + cardSize.width / 2, topLeft.dy),
-                                LinkPort.childBottom => Offset(
-                                    topLeft.dx + cardSize.width / 2, topLeft.dy + cardSize.height),
-                                LinkPort.spouseLeft =>
-                                  Offset(topLeft.dx, topLeft.dy + cardSize.height / 2),
-                                LinkPort.spouseRight => Offset(
-                                    topLeft.dx + cardSize.width, topLeft.dy + cardSize.height / 2),
-                              };
+                                if (ids.length == 1) {
+                                  store.addManualOffset(draggedId, delta);
+                                } else {
+                                  store.addManualOffsetBulk(ids, delta);
+                                }
+                              },
+                              onStartPortDrag: (port, globalStart) {
+                                final topLeft = layout[entry.key]!;
+                                final startScene = switch (port) {
+                                  LinkPort.parentTop =>
+                                    Offset(topLeft.dx + cardSize.width / 2, topLeft.dy),
+                                  LinkPort.childBottom => Offset(
+                                      topLeft.dx + cardSize.width / 2,
+                                      topLeft.dy + cardSize.height,
+                                    ),
+                                  LinkPort.spouseLeft =>
+                                    Offset(topLeft.dx, topLeft.dy + cardSize.height / 2),
+                                  LinkPort.spouseRight => Offset(
+                                      topLeft.dx + cardSize.width,
+                                      topLeft.dy + cardSize.height / 2,
+                                    ),
+                                };
 
-                              _startLink(
-                                fromNodeId: entry.key,
-                                port: port,
-                                startScene: startScene,
-                                startViewport: _globalToViewport(globalStart),
-                              );
-                            },
-                            onUpdatePortDrag: (g) => _updateLink(_globalToViewport(g)),
-                            onEndPortDrag: (g) => _endLink(_globalToViewport(g)),
-                            onTapPort: _handlePortTap,
-                          ),
-                      ],
+                                _startLink(
+                                  fromNodeId: entry.key,
+                                  port: port,
+                                  startScene: startScene,
+                                  startViewport: _globalToViewport(globalStart),
+                                );
+                              },
+                              onUpdatePortDrag: (g) => _updateLink(_globalToViewport(g)),
+                              onEndPortDrag: (g) => _endLink(_globalToViewport(g)),
+                              onTapPort: _handlePortTap,
+                            ),
+                        ],
+                      ),
                     ),
                   ),
                 ),
@@ -1332,11 +1441,56 @@ class _FamilyTreeScreenState extends State<FamilyTreeScreen> {
                     child: CustomPaint(
                       painter: LinkPreviewPainter(
                         start: _sceneToViewport(_linkStartScene),
-                        end: (_hoverTargetId != null) ? _snappedEndViewport : _linkCurrentViewport,
+                        end: _hoverTargetId != null ? _snappedEndViewport : _linkCurrentViewport,
                       ),
                     ),
                   ),
                 ),
+              Positioned(
+                left: 0,
+                top: 0,
+                bottom: 0,
+                width: _drawerWidth,
+                child: IgnorePointer(
+                  ignoring: !_isDrawerOpen || _drawerRequest == null,
+                  child: AnimatedSlide(
+                    duration: const Duration(milliseconds: 320),
+                    curve: Curves.easeOutQuart,
+                    offset: _isDrawerOpen && _drawerRequest != null
+                        ? Offset.zero
+                        : const Offset(-1.0, 0),
+                    child: AnimatedOpacity(
+                      duration: const Duration(milliseconds: 220),
+                      curve: Curves.easeOut,
+                      opacity: _isDrawerOpen && _drawerRequest != null ? 1 : 0,
+                      child: Material(
+                        elevation: 16,
+                        shadowColor: Colors.black26,
+                        color: Colors.white,
+                        child: SafeArea(
+                          child: _drawerRequest == null
+                              ? const SizedBox.shrink()
+                              : _MemberFormSidebar(
+                                  title: _drawerRequest!.title,
+                                  showNameField: _drawerRequest!.showNameField,
+                                  initialName: _drawerRequest!.initialName,
+                                  initialGender: _drawerRequest!.initialGender,
+                                  allowedGenders: _drawerRequest!.allowedGenders,
+                                  initialDetails: _drawerRequest!.initialDetails,
+                                  initialBirthday: _drawerRequest!.initialBirthday,
+                                  initialPhotoBytes: _drawerRequest!.initialPhotoBytes,
+                                  initialPhotoProvider: _drawerRequest!.initialPhotoProvider,
+                                  allowRemovePhoto: _drawerRequest!.allowRemovePhoto,
+                                  allowClearBirthday: _drawerRequest!.allowClearBirthday,
+                                  onCancel: _closeDrawerUnsaved,
+                                  onSave: _saveDrawer,
+                                ),
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
               if (isEmpty)
                 Center(
                   child: Padding(
@@ -1453,7 +1607,8 @@ class _FamilyTreeScreenState extends State<FamilyTreeScreen> {
 
   void _fitToScreen(Rect bounds) {
     final screenSize = MediaQuery.of(context).size;
-    final scale = min(screenSize.width / bounds.width, screenSize.height / bounds.height) * 0.8;
+    final scale =
+        min(screenSize.width / bounds.width, screenSize.height / bounds.height) * 0.8;
 
     _syncingFromController = true;
     _tc.value = Matrix4.identity()
@@ -1462,8 +1617,442 @@ class _FamilyTreeScreenState extends State<FamilyTreeScreen> {
       ..translate(-bounds.center.dx, -bounds.center.dy);
     _syncingFromController = false;
 
-    final clamped = scale.clamp(_minZoom, _maxZoom);
-    setState(() => _zoomValue = clamped);
+    setState(() => _zoomValue = scale.clamp(_minZoom, _maxZoom));
+  }
+}
+
+/* =========================
+   Drawer form
+   ========================= */
+
+class _MemberFormSidebar extends StatefulWidget {
+  const _MemberFormSidebar({
+    required this.title,
+    required this.showNameField,
+    required this.initialName,
+    required this.initialGender,
+    required this.allowedGenders,
+    required this.initialDetails,
+    required this.initialBirthday,
+    required this.initialPhotoBytes,
+    required this.initialPhotoProvider,
+    required this.allowRemovePhoto,
+    required this.allowClearBirthday,
+    required this.onCancel,
+    required this.onSave,
+  });
+
+  final String title;
+  final bool showNameField;
+  final String? initialName;
+  final Gender initialGender;
+  final List<Gender> allowedGenders;
+  final MemberDetails initialDetails;
+  final DateTime? initialBirthday;
+  final Uint8List? initialPhotoBytes;
+  final ImageProvider? initialPhotoProvider;
+  final bool allowRemovePhoto;
+  final bool allowClearBirthday;
+  final VoidCallback onCancel;
+  final ValueChanged<MemberFormResult> onSave;
+
+  @override
+  State<_MemberFormSidebar> createState() => _MemberFormSidebarState();
+}
+
+class _MemberFormSidebarState extends State<_MemberFormSidebar> {
+  final _formKey = GlobalKey<FormState>();
+  final _picker = ImagePicker();
+
+  late final TextEditingController _nameController;
+  late final TextEditingController _addressController;
+  late final TextEditingController _phoneController;
+  late final TextEditingController _companyController;
+  late final TextEditingController _jobTitleController;
+  late final TextEditingController _fbController;
+  late final TextEditingController _igController;
+  late final TextEditingController _xController;
+  late final TextEditingController _tiktokController;
+
+  late Gender _gender;
+  DateTime? _birthday;
+  bool _clearBirthday = false;
+  bool _removePhoto = false;
+  Uint8List? _newPhotoBytes;
+
+  @override
+  void initState() {
+    super.initState();
+    _nameController = TextEditingController(text: widget.initialName ?? '');
+    _addressController = TextEditingController(text: widget.initialDetails.address ?? '');
+    _phoneController = TextEditingController(text: widget.initialDetails.phone ?? '');
+    _companyController = TextEditingController(text: widget.initialDetails.company ?? '');
+    _jobTitleController = TextEditingController(text: widget.initialDetails.jobTitle ?? '');
+    _fbController = TextEditingController(text: widget.initialDetails.fb ?? '');
+    _igController = TextEditingController(text: widget.initialDetails.ig ?? '');
+    _xController = TextEditingController(text: widget.initialDetails.xAccount ?? '');
+    _tiktokController = TextEditingController(text: widget.initialDetails.tiktok ?? '');
+    _gender = widget.initialGender;
+    _birthday = widget.initialBirthday;
+  }
+
+  @override
+  void dispose() {
+    _nameController.dispose();
+    _addressController.dispose();
+    _phoneController.dispose();
+    _companyController.dispose();
+    _jobTitleController.dispose();
+    _fbController.dispose();
+    _igController.dispose();
+    _xController.dispose();
+    _tiktokController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _pickPhoto() async {
+    try {
+      final file = await _picker.pickImage(
+        source: ImageSource.gallery,
+        imageQuality: 88,
+        maxWidth: 1800,
+      );
+      if (file == null) return;
+
+      final bytes = await file.readAsBytes();
+      if (!mounted) return;
+
+      setState(() {
+        _newPhotoBytes = bytes;
+        _removePhoto = false;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Could not pick photo: $e')),
+      );
+    }
+  }
+
+  Future<void> _pickBirthday() async {
+    final now = DateTime.now();
+    final initial = _birthday ?? DateTime(now.year - 20, now.month, now.day);
+
+    final picked = await showDatePicker(
+      context: context,
+      initialDate: initial,
+      firstDate: DateTime(1800),
+      lastDate: now,
+    );
+
+    if (picked == null) return;
+
+    setState(() {
+      _birthday = picked;
+      _clearBirthday = false;
+    });
+  }
+
+  InputDecoration _dec(String label, {IconData? icon}) {
+    return InputDecoration(
+      labelText: label,
+      prefixIcon: icon != null ? Icon(icon, size: 18) : null,
+      border: OutlineInputBorder(borderRadius: BorderRadius.circular(14)),
+      isDense: true,
+    );
+  }
+
+  void _submit() {
+    if (!_formKey.currentState!.validate()) return;
+
+    final details = MemberDetails(
+      address: _addressController.text.trim(),
+      phone: _phoneController.text.trim(),
+      company: _companyController.text.trim(),
+      jobTitle: _jobTitleController.text.trim(),
+      fb: _fbController.text.trim(),
+      ig: _igController.text.trim(),
+      xAccount: _xController.text.trim(),
+      tiktok: _tiktokController.text.trim(),
+    );
+
+    widget.onSave(
+      MemberFormResult(
+        saved: true,
+        name: widget.showNameField ? _nameController.text.trim() : null,
+        gender: _gender,
+        details: details,
+        birthday: _clearBirthday ? null : _birthday,
+        clearBirthday: _clearBirthday,
+        removePhoto: _removePhoto,
+        newPhotoBytes: _removePhoto ? null : _newPhotoBytes,
+      ),
+    );
+  }
+
+  Widget _buildPhotoPreview() {
+    if (_removePhoto) {
+      return Container(
+        width: 92,
+        height: 92,
+        decoration: BoxDecoration(
+          color: Colors.grey.shade100,
+          shape: BoxShape.circle,
+          border: Border.all(color: Colors.grey.shade300),
+        ),
+        child: const Icon(Icons.person_outline, size: 34),
+      );
+    }
+
+    if (_newPhotoBytes != null) {
+      return Container(
+        width: 92,
+        height: 92,
+        decoration: BoxDecoration(
+          shape: BoxShape.circle,
+          border: Border.all(color: Colors.grey.shade300),
+          image: DecorationImage(
+            image: MemoryImage(_newPhotoBytes!),
+            fit: BoxFit.cover,
+          ),
+        ),
+      );
+    }
+
+    if (widget.initialPhotoBytes != null) {
+      return Container(
+        width: 92,
+        height: 92,
+        decoration: BoxDecoration(
+          shape: BoxShape.circle,
+          border: Border.all(color: Colors.grey.shade300),
+          image: DecorationImage(
+            image: MemoryImage(widget.initialPhotoBytes!),
+            fit: BoxFit.cover,
+          ),
+        ),
+      );
+    }
+
+    if (widget.initialPhotoProvider != null) {
+      return Container(
+        width: 92,
+        height: 92,
+        decoration: BoxDecoration(
+          shape: BoxShape.circle,
+          border: Border.all(color: Colors.grey.shade300),
+          image: DecorationImage(
+            image: widget.initialPhotoProvider!,
+            fit: BoxFit.cover,
+          ),
+        ),
+      );
+    }
+
+    return Container(
+      width: 92,
+      height: 92,
+      decoration: BoxDecoration(
+        color: Colors.grey.shade100,
+        shape: BoxShape.circle,
+        border: Border.all(color: Colors.grey.shade300),
+      ),
+      child: Icon(_gender.icon, size: 34, color: Colors.grey.shade700),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final birthdayText = _clearBirthday
+        ? 'No birthday'
+        : (_birthday != null ? formatDate(_birthday!) : 'Select birthday');
+
+    return Column(
+      children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 14, 8, 10),
+          child: Row(
+            children: [
+              Expanded(
+                child: Text(
+                  widget.title,
+                  style: const TextStyle(fontSize: 20, fontWeight: FontWeight.w800),
+                ),
+              ),
+              IconButton(
+                tooltip: 'Close',
+                onPressed: widget.onCancel,
+                icon: const Icon(Icons.close),
+              ),
+            ],
+          ),
+        ),
+        const Divider(height: 1),
+        Expanded(
+          child: Form(
+            key: _formKey,
+            child: ListView(
+              padding: const EdgeInsets.fromLTRB(16, 16, 16, 24),
+              children: [
+                Center(child: _buildPhotoPreview()),
+                const SizedBox(height: 12),
+                Wrap(
+                  alignment: WrapAlignment.center,
+                  spacing: 8,
+                  runSpacing: 8,
+                  children: [
+                    OutlinedButton.icon(
+                      onPressed: _pickPhoto,
+                      icon: const Icon(Icons.photo_library_outlined),
+                      label: const Text('Choose Photo'),
+                    ),
+                    if (widget.allowRemovePhoto)
+                      OutlinedButton.icon(
+                        onPressed: () {
+                          setState(() {
+                            _removePhoto = true;
+                            _newPhotoBytes = null;
+                          });
+                        },
+                        icon: const Icon(Icons.delete_outline),
+                        label: const Text('Remove Photo'),
+                      ),
+                  ],
+                ),
+                const SizedBox(height: 18),
+                if (widget.showNameField) ...[
+                  TextFormField(
+                    controller: _nameController,
+                    decoration: _dec('Name', icon: Icons.person_outline),
+                    validator: (v) {
+                      if (!widget.showNameField) return null;
+                      if ((v ?? '').trim().isEmpty) return 'Name is required';
+                      return null;
+                    },
+                  ),
+                  const SizedBox(height: 14),
+                ],
+                DropdownButtonFormField<Gender>(
+                  value: _gender,
+                  decoration: _dec('Gender', icon: Icons.wc),
+                  items: widget.allowedGenders
+                      .map(
+                        (g) => DropdownMenuItem<Gender>(
+                          value: g,
+                          child: Text(g.label),
+                        ),
+                      )
+                      .toList(),
+                  onChanged: (value) {
+                    if (value == null) return;
+                    setState(() => _gender = value);
+                  },
+                ),
+                const SizedBox(height: 14),
+                InkWell(
+                  onTap: _pickBirthday,
+                  borderRadius: BorderRadius.circular(14),
+                  child: InputDecorator(
+                    decoration: _dec('Birthday', icon: Icons.cake_outlined),
+                    child: Row(
+                      children: [
+                        Expanded(child: Text(birthdayText)),
+                        const Icon(Icons.calendar_month_outlined, size: 18),
+                      ],
+                    ),
+                  ),
+                ),
+                if (widget.allowClearBirthday) ...[
+                  const SizedBox(height: 8),
+                  CheckboxListTile(
+                    contentPadding: EdgeInsets.zero,
+                    value: _clearBirthday,
+                    title: const Text('Clear birthday'),
+                    controlAffinity: ListTileControlAffinity.leading,
+                    onChanged: (v) {
+                      setState(() {
+                        _clearBirthday = v ?? false;
+                      });
+                    },
+                  ),
+                ],
+                const SizedBox(height: 8),
+                TextFormField(
+                  controller: _addressController,
+                  decoration: _dec('Address', icon: Icons.home_outlined),
+                ),
+                const SizedBox(height: 14),
+                TextFormField(
+                  controller: _phoneController,
+                  decoration: _dec('Phone', icon: Icons.phone_outlined),
+                ),
+                const SizedBox(height: 14),
+                TextFormField(
+                  controller: _companyController,
+                  decoration: _dec('Company', icon: Icons.business_outlined),
+                ),
+                const SizedBox(height: 14),
+                TextFormField(
+                  controller: _jobTitleController,
+                  decoration: _dec('Job Title', icon: Icons.badge_outlined),
+                ),
+                const SizedBox(height: 14),
+                TextFormField(
+                  controller: _fbController,
+                  decoration: _dec('Facebook', icon: Icons.facebook),
+                ),
+                const SizedBox(height: 14),
+                TextFormField(
+                  controller: _igController,
+                  decoration: _dec('Instagram', icon: Icons.camera_alt_outlined),
+                ),
+                const SizedBox(height: 14),
+                TextFormField(
+                  controller: _xController,
+                  decoration: _dec('X', icon: Icons.alternate_email),
+                ),
+                const SizedBox(height: 14),
+                TextFormField(
+                  controller: _tiktokController,
+                  decoration: _dec('TikTok', icon: Icons.music_note_outlined),
+                ),
+              ],
+            ),
+          ),
+        ),
+        Container(
+          padding: const EdgeInsets.fromLTRB(16, 12, 16, 16),
+          decoration: BoxDecoration(
+            color: Colors.white,
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withAlpha(10),
+                blurRadius: 12,
+                offset: const Offset(0, -2),
+              ),
+            ],
+          ),
+          child: Row(
+            children: [
+              Expanded(
+                child: OutlinedButton(
+                  onPressed: widget.onCancel,
+                  child: const Text('Cancel'),
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: FilledButton.icon(
+                  onPressed: _submit,
+                  icon: const Icon(Icons.save_outlined),
+                  label: const Text('Save'),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
   }
 }
 
@@ -1487,6 +2076,7 @@ class AnimatedNode extends StatefulWidget {
     required this.onTapPort,
     required this.isHovered,
     required this.isSelected,
+    required this.isDragging,
     required this.onHoverChanged,
     required this.dragEnabled,
     required this.showPortsEnabled,
@@ -1496,7 +2086,7 @@ class AnimatedNode extends StatefulWidget {
   final Offset topLeft;
   final Size size;
 
-  final ValueChanged<int> onTapSelect;
+  final void Function(int id, Offset globalPosition) onTapSelect;
 
   final ValueChanged<Offset> onDragDelta;
   final VoidCallback onDragStart;
@@ -1510,6 +2100,7 @@ class AnimatedNode extends StatefulWidget {
 
   final bool isHovered;
   final bool isSelected;
+  final bool isDragging;
   final ValueChanged<bool> onHoverChanged;
   final bool dragEnabled;
   final bool showPortsEnabled;
@@ -1523,9 +2114,13 @@ class _AnimatedNodeState extends State<AnimatedNode> {
 
   @override
   Widget build(BuildContext context) {
+    final lifted = widget.isHovered || widget.isSelected || widget.isDragging;
+
     return AnimatedPositioned(
-      duration: const Duration(milliseconds: 260),
-      curve: Curves.easeOutCubic,
+      duration: widget.isDragging
+          ? const Duration(milliseconds: 70)
+          : const Duration(milliseconds: 340),
+      curve: widget.isDragging ? Curves.linear : Curves.easeOutQuart,
       left: widget.topLeft.dx,
       top: widget.topLeft.dy,
       width: widget.size.width,
@@ -1537,21 +2132,43 @@ class _AnimatedNodeState extends State<AnimatedNode> {
           widget.onHoverChanged(false);
         },
         onHover: (e) => setState(() => _hoverLocal = e.localPosition),
-        child: GestureDetector(
-          onTap: () => widget.onTapSelect(widget.node.id),
-          onPanStart: widget.dragEnabled ? (_) => widget.onDragStart() : null,
-          onPanUpdate: widget.dragEnabled ? (d) => widget.onDragDelta(d.delta) : null,
-          onPanEnd: widget.dragEnabled ? (_) => widget.onDragEnd() : null,
-          child: MemberCard(
-            node: widget.node,
-            showPorts: widget.isHovered && widget.showPortsEnabled,
-            hoverLocal: _hoverLocal,
-            size: widget.size,
-            isSelected: widget.isSelected,
-            onStartPortDrag: widget.onStartPortDrag,
-            onUpdatePortDrag: widget.onUpdatePortDrag,
-            onEndPortDrag: widget.onEndPortDrag,
-            onTapPort: widget.onTapPort,
+        child: AnimatedScale(
+          duration: const Duration(milliseconds: 180),
+          curve: Curves.easeOutCubic,
+          scale: lifted ? 1.015 : 1.0,
+          child: AnimatedContainer(
+            duration: const Duration(milliseconds: 180),
+            curve: Curves.easeOutCubic,
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(16),
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.black.withAlpha(lifted ? 28 : 10),
+                  blurRadius: lifted ? 18 : 8,
+                  offset: Offset(0, lifted ? 8 : 3),
+                ),
+              ],
+            ),
+            child: GestureDetector(
+              onTapUp: (details) => widget.onTapSelect(
+                widget.node.id,
+                details.globalPosition,
+              ),
+              onPanStart: widget.dragEnabled ? (_) => widget.onDragStart() : null,
+              onPanUpdate: widget.dragEnabled ? (d) => widget.onDragDelta(d.delta) : null,
+              onPanEnd: widget.dragEnabled ? (_) => widget.onDragEnd() : null,
+              child: MemberCard(
+                node: widget.node,
+                showPorts: widget.isHovered && widget.showPortsEnabled,
+                hoverLocal: _hoverLocal,
+                size: widget.size,
+                isSelected: widget.isSelected,
+                onStartPortDrag: widget.onStartPortDrag,
+                onUpdatePortDrag: widget.onUpdatePortDrag,
+                onEndPortDrag: widget.onEndPortDrag,
+                onTapPort: widget.onTapPort,
+              ),
+            ),
           ),
         ),
       ),
@@ -1661,29 +2278,43 @@ class MemberCard extends StatelessWidget {
                         mainAxisAlignment: MainAxisAlignment.center,
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          Text(
-                            node.name,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: const TextStyle(fontWeight: FontWeight.w700),
-                          ),
-                          const SizedBox(height: 4),
-                          Text(
-                            node.gender.label,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: TextStyle(color: Colors.grey.shade700, fontSize: 12),
-                          ),
-                          if (node.birthday != null) ...[
-                            const SizedBox(height: 2),
-                            Text(
-                              formatDate(node.birthday!),
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              style: TextStyle(color: Colors.grey.shade600, fontSize: 12),
-                            ),
-                          ],
-                        ],
+  Text(
+    node.name,
+    maxLines: 2,
+    softWrap: true,
+    overflow: TextOverflow.visible,
+    style: const TextStyle(
+      fontWeight: FontWeight.w700,
+      height: 1.15,
+    ),
+  ),
+  const SizedBox(height: 4),
+  if (node.birthday != null) ...[
+    const SizedBox(height: 2),
+    Row(
+      crossAxisAlignment: CrossAxisAlignment.center,
+      children: [
+        Icon(
+          Icons.cake,
+          size: 14,
+          color: Colors.grey.shade600,
+        ),
+        const SizedBox(width: 4),
+        Expanded(
+          child: Text(
+            formatDate(node.birthday!),
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: TextStyle(
+              color: Colors.grey.shade600,
+              fontSize: 12,
+            ),
+          ),
+        ),
+      ],
+    ),
+  ],
+],
                       ),
                     ),
                   ],
@@ -1745,8 +2376,63 @@ class MemberCard extends StatelessWidget {
   }
 }
 
+class _PopupActionButton extends StatelessWidget {
+  const _PopupActionButton({
+    required this.icon,
+    required this.label,
+    required this.color,
+    required this.onTap,
+    this.enabled = true,
+  });
+
+  final IconData icon;
+  final String label;
+  final Color color;
+  final VoidCallback onTap;
+  final bool enabled;
+
+  @override
+  Widget build(BuildContext context) {
+    final bg = enabled ? color.withAlpha(31) : Colors.grey.shade200;
+    final fg = enabled ? color : Colors.grey.shade500;
+
+    return InkWell(
+      onTap: enabled ? onTap : null,
+      borderRadius: BorderRadius.circular(16),
+      child: Container(
+        width: 135,
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+        decoration: BoxDecoration(
+          color: bg,
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(
+            color: enabled ? color.withAlpha(51) : Colors.grey.shade300,
+          ),
+        ),
+        child: Row(
+          children: [
+            Icon(icon, color: fg, size: 18),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Text(
+                label,
+                style: TextStyle(
+                  color: fg,
+                  fontWeight: FontWeight.w600,
+                  fontSize: 13,
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
 class LinkPreviewPainter extends CustomPainter {
   LinkPreviewPainter({required this.start, required this.end});
+
   final Offset start;
   final Offset end;
 
@@ -1777,6 +2463,7 @@ class LinkPreviewPainter extends CustomPainter {
 
 class _Group {
   _Group({required this.parentIds});
+
   final List<int> parentIds;
   final List<int> childIds = [];
 }
@@ -1825,22 +2512,16 @@ class ConnectorPainter extends CustomPainter {
 
       final (femaleP, maleP) = store.parentPairForPerson(child.id);
 
-      // Start with the known parents from the child's data
       final parentIds = <int>[
         if (femaleP != null) femaleP,
         if (maleP != null) maleP,
       ]..sort();
 
-      // ✅ VISUAL FIX:
-      // If the child only has ONE parent recorded, try to attach them visually to that
-      // parent's spouse line (so they share the horizontal children bus with siblings).
-      // (This does NOT change the database; it only affects drawing.)
       if (parentIds.length == 1) {
         final onlyParentId = parentIds.first;
         final onlyParent = store.nodes[onlyParentId];
 
         if (onlyParent != null && onlyParent.spouses.isNotEmpty) {
-          // pick a spouse that is positioned (visible)
           final spouseId = onlyParent.spouses.firstWhere(
             (sid) => positions.containsKey(sid),
             orElse: () => -1,
@@ -1878,8 +2559,8 @@ class ConnectorPainter extends CustomPainter {
 
         final lo = min(a.id, bId);
         final hi = max(a.id, bId);
-
         final pairKey = '${lo}_$hi';
+
         if (drawnSpousePairs.contains(pairKey)) continue;
         drawnSpousePairs.add(pairKey);
 
@@ -1906,6 +2587,7 @@ class ConnectorPainter extends CustomPainter {
           ),
           textDirection: TextDirection.ltr,
         )..layout();
+
         heart.paint(canvas, Offset(midX - heart.width / 2, coupleY - heart.height / 2));
       }
     }
