@@ -34,7 +34,7 @@ dependencies:
   image_picker: ^1.1.2
   photo_view: ^0.15.0
   image: ^4.1.7
-  lucide_icons: ^0.257.0
+  lucide_icons:
   http: ^1.2.1
 
   firebase_core: 
