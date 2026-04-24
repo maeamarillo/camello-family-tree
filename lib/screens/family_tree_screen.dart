@@ -29,6 +29,26 @@ class FamilyTreeScreen extends StatefulWidget {
   State<FamilyTreeScreen> createState() => _FamilyTreeScreenState();
 }
 
+class _TreeGreenTheme {
+  static const Color scaffold = Color(0xFFF3FBF5);
+  static const Color surface = Color(0xFFFFFFFF);
+  static const Color softSurface = Color(0xFFF7FCF8);
+  static const Color appBar = Color(0xFFE2F3E7);
+  static const Color primary = Color(0xFF2E7D5A);
+  static const Color primaryDark = Color(0xFF235E44);
+  static const Color accent = Color(0xFF67B37F);
+  static const Color border = Color(0xFFCFE5D6);
+  static const Color divider = Color(0xFFD9EADF);
+  static const Color shadow = Color(0x1F1F3A29);
+  static const Color textMuted = Color(0xFF5F7468);
+  static const Color connector = Color(0xFFA6C9B1);
+  static const Color selection = Color(0xFF4FA36D);
+  static const Color actionBlue = Color(0xFF4F8F72);
+  static const Color actionPink = Color(0xFF8FBF8A);
+  static const Color actionPurple = Color(0xFF6DAA7F);
+  static const Color actionTeal = Color(0xFF3D9B73);
+}
+
 class FamilyTreeLayout {
   FamilyTreeLayout({
     required this.store,
@@ -200,6 +220,78 @@ class _FamilyTreeScreenState extends State<FamilyTreeScreen> {
     _tc.dispose();
     super.dispose();
   }
+
+  int? _searchNodeId(String query) {
+  final q = query.toLowerCase().trim();
+
+  for (final entry in store.nodes.entries) {
+    final node = entry.value;
+    if (node.name.toLowerCase().contains(q)) {
+      return entry.key;
+    }
+  }
+
+  return null;
+}
+
+void _focusNode(int nodeId) {
+  final pos = _lastLayoutScene[nodeId];
+  if (pos == null) return;
+
+  final screenSize = MediaQuery.of(context).size;
+  final viewportCenter = Offset(screenSize.width / 2, screenSize.height / 2);
+
+  final nodeCenter = pos + Offset(cardSize.width / 2, cardSize.height / 2);
+
+  _syncingFromController = true;
+
+  _tc.value = Matrix4.identity()
+    ..translate(viewportCenter.dx, viewportCenter.dy)
+    ..scale(_zoomValue)
+    ..translate(-nodeCenter.dx, -nodeCenter.dy);
+
+  _syncingFromController = false;
+
+  setState(() {
+    _hoveredNodeId = nodeId; // highlight
+  });
+}
+
+void _handleSearch(String query) {
+  final id = _searchNodeId(query);
+
+  if (id == null) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('Member not found')),
+    );
+    return;
+  }
+
+  _focusNode(id);
+}
+
+int? _findNodeByExactName(String name) {
+  final q = name.toLowerCase().trim();
+
+  for (final entry in store.nodes.entries) {
+    if (entry.value.name.toLowerCase().trim() == q) {
+      return entry.key;
+    }
+  }
+  return null;
+}
+
+void _placeNear(int newId, int targetId, Offset offset) {
+  final targetPos = _lastLayoutScene[targetId];
+  final newPos = _lastLayoutScene[newId];
+
+  if (targetPos == null || newPos == null) return;
+
+  final desired = targetPos + offset;
+  final delta = desired - newPos;
+
+  store.addManualOffset(newId, delta);
+}
 
   Future<void> _ensureLoadedFromCloud() async {
     if (_loadedOnce) return;
@@ -656,8 +748,19 @@ class _FamilyTreeScreenState extends State<FamilyTreeScreen> {
     );
     if (!mounted || !r.saved) return;
 
-    final name = (r.name ?? '').trim();
-    if (name.isEmpty) return;
+final name = (r.name ?? '').trim();
+if (name.isEmpty) return;
+
+// 🔍 check duplicate
+final existingId = _findNodeByExactName(name);
+if (existingId != null) {
+  ScaffoldMessenger.of(context).showSnackBar(
+    SnackBar(content: Text('$name already exists. Redirecting...')),
+  );
+
+  _focusNode(existingId);
+  return;
+}
 
     final photoUrl = await _uploadPhotoIfNeeded(r.newPhotoBytes, 'member');
     if (!mounted) return;
@@ -691,8 +794,19 @@ class _FamilyTreeScreenState extends State<FamilyTreeScreen> {
     );
     if (!mounted || !r.saved) return;
 
-    final name = (r.name ?? '').trim();
-    if (name.isEmpty) return;
+final name = (r.name ?? '').trim();
+if (name.isEmpty) return;
+
+// 🔍 check duplicate
+final existingId = _findNodeByExactName(name);
+if (existingId != null) {
+  ScaffoldMessenger.of(context).showSnackBar(
+    SnackBar(content: Text('$name already exists. Redirecting...')),
+  );
+
+  _focusNode(existingId);
+  return;
+}
 
     final photoUrl = await _uploadPhotoIfNeeded(r.newPhotoBytes, 'member');
     if (!mounted) return;
@@ -762,12 +876,12 @@ class _FamilyTreeScreenState extends State<FamilyTreeScreen> {
             width: 320,
             padding: const EdgeInsets.all(16),
             decoration: BoxDecoration(
-              color: Colors.white,
+              color: _TreeGreenTheme.surface,
               borderRadius: BorderRadius.circular(24),
-              border: Border.all(color: const Color(0xFFE7EAF0)),
+              border: Border.all(color: _TreeGreenTheme.border),
               boxShadow: [
                 BoxShadow(
-                  color: Colors.black.withAlpha(31),
+                  color: _TreeGreenTheme.shadow,
                   blurRadius: 18,
                   offset: const Offset(0, 8),
                 ),
@@ -787,10 +901,10 @@ class _FamilyTreeScreenState extends State<FamilyTreeScreen> {
                         decoration: BoxDecoration(
                           shape: BoxShape.circle,
                           color: !node.hasPhoto ? node.gender.tone : null,
-                          border: Border.all(color: Colors.grey.shade300, width: 1),
+                          border: Border.all(color: _TreeGreenTheme.border, width: 1),
                         ),
                         child: !node.hasPhoto
-                            ? Icon(node.gender.icon, size: 26, color: Colors.grey.shade700)
+                            ? Icon(node.gender.icon, size: 26, color: _TreeGreenTheme.textMuted)
                             : ClipOval(
                                 child: Image(image: node.photoProvider, fit: BoxFit.cover),
                               ),
@@ -813,13 +927,13 @@ class _FamilyTreeScreenState extends State<FamilyTreeScreen> {
                           const SizedBox(height: 4),
                           Row(
                             children: [
-                              Icon(node.gender.icon, size: 14, color: Colors.grey.shade600),
+                              Icon(node.gender.icon, size: 14, color: _TreeGreenTheme.textMuted),
                               const SizedBox(width: 4),
                               Flexible(
                                 child: Text(
                                   node.gender.label,
                                   style: TextStyle(
-                                    color: Colors.grey.shade600,
+                                    color: _TreeGreenTheme.textMuted,
                                     fontSize: 12,
                                   ),
                                   overflow: TextOverflow.ellipsis,
@@ -836,7 +950,7 @@ class _FamilyTreeScreenState extends State<FamilyTreeScreen> {
                 if (lines.isEmpty)
                   Text(
                     'No additional details provided.',
-                    style: TextStyle(color: Colors.grey.shade700),
+                    style: const TextStyle(color: _TreeGreenTheme.textMuted),
                   )
                 else
                   ConstrainedBox(
@@ -909,12 +1023,12 @@ class _FamilyTreeScreenState extends State<FamilyTreeScreen> {
             width: 320,
             padding: const EdgeInsets.all(16),
             decoration: BoxDecoration(
-              color: Colors.white,
+              color: _TreeGreenTheme.surface,
               borderRadius: BorderRadius.circular(24),
-              border: Border.all(color: const Color(0xFFE7EAF0)),
+              border: Border.all(color: _TreeGreenTheme.border),
               boxShadow: [
                 BoxShadow(
-                  color: Colors.black.withAlpha(31),
+                  color: _TreeGreenTheme.shadow,
                   blurRadius: 18,
                   offset: const Offset(0, 8),
                 ),
@@ -933,10 +1047,10 @@ class _FamilyTreeScreenState extends State<FamilyTreeScreen> {
                         decoration: BoxDecoration(
                           shape: BoxShape.circle,
                           color: !node.hasPhoto ? node.gender.tone : null,
-                          border: Border.all(color: Colors.grey.shade300, width: 1),
+                          border: Border.all(color: _TreeGreenTheme.border, width: 1),
                         ),
                         child: !node.hasPhoto
-                            ? Icon(node.gender.icon, size: 24, color: Colors.grey.shade700)
+                            ? Icon(node.gender.icon, size: 24, color: _TreeGreenTheme.textMuted)
                             : ClipOval(
                                 child: Image(image: node.photoProvider, fit: BoxFit.cover),
                               ),
@@ -959,13 +1073,13 @@ class _FamilyTreeScreenState extends State<FamilyTreeScreen> {
                           const SizedBox(height: 4),
                           Row(
                             children: [
-                              Icon(node.gender.icon, size: 14, color: Colors.grey.shade600),
+                              Icon(node.gender.icon, size: 14, color: _TreeGreenTheme.textMuted),
                               const SizedBox(width: 4),
                               Flexible(
                                 child: Text(
                                   node.gender.label,
                                   style: TextStyle(
-                                    color: Colors.grey.shade600,
+                                    color: _TreeGreenTheme.textMuted,
                                     fontSize: 12,
                                   ),
                                   overflow: TextOverflow.ellipsis,
@@ -979,7 +1093,7 @@ class _FamilyTreeScreenState extends State<FamilyTreeScreen> {
                                   child: Text(
                                     formatDate(node.birthday!),
                                     style: TextStyle(
-                                      color: Colors.grey.shade600,
+                                      color: _TreeGreenTheme.textMuted,
                                       fontSize: 12,
                                     ),
                                     overflow: TextOverflow.ellipsis,
@@ -1001,27 +1115,27 @@ class _FamilyTreeScreenState extends State<FamilyTreeScreen> {
                     _PopupActionButton(
                       icon: Icons.badge_outlined,
                       label: 'Edit Details',
-                      color: Colors.indigo,
+                      color: _TreeGreenTheme.actionBlue,
                       onTap: () => Navigator.pop(context, 'details'),
                     ),
                     _PopupActionButton(
                       icon: Icons.favorite,
                       label: 'Add Spouse',
-                      color: Colors.pink,
+                      color: _TreeGreenTheme.actionPink,
                       enabled: node.spouses.isEmpty,
                       onTap: () => Navigator.pop(context, 'spouse'),
                     ),
                     _PopupActionButton(
                       icon: Icons.person,
                       label: 'Add Parent',
-                      color: Colors.purple,
+                      color: _TreeGreenTheme.actionPurple,
                       enabled: node.parents.length < 2,
                       onTap: () => Navigator.pop(context, 'parent'),
                     ),
                     _PopupActionButton(
                       icon: Icons.child_care,
                       label: 'Add Child',
-                      color: Colors.teal,
+                      color: _TreeGreenTheme.actionTeal,
                       onTap: () => Navigator.pop(context, 'child'),
                     ),
                     _PopupActionButton(
@@ -1111,8 +1225,19 @@ class _FamilyTreeScreenState extends State<FamilyTreeScreen> {
     );
     if (!mounted || !r.saved) return;
 
-    final name = (r.name ?? '').trim();
-    if (name.isEmpty) return;
+final name = (r.name ?? '').trim();
+if (name.isEmpty) return;
+
+// 🔍 check duplicate
+final existingId = _findNodeByExactName(name);
+if (existingId != null) {
+  ScaffoldMessenger.of(context).showSnackBar(
+    SnackBar(content: Text('$name already exists. Redirecting...')),
+  );
+
+  _focusNode(existingId);
+  return;
+}
 
     final photoUrl = await _uploadPhotoIfNeeded(r.newPhotoBytes, 'spouse');
     if (!mounted) return;
@@ -1176,8 +1301,19 @@ class _FamilyTreeScreenState extends State<FamilyTreeScreen> {
     );
     if (!mounted || !r.saved) return;
 
-    final name = (r.name ?? '').trim();
-    if (name.isEmpty) return;
+final name = (r.name ?? '').trim();
+if (name.isEmpty) return;
+
+// 🔍 check duplicate
+final existingId = _findNodeByExactName(name);
+if (existingId != null) {
+  ScaffoldMessenger.of(context).showSnackBar(
+    SnackBar(content: Text('$name already exists. Redirecting...')),
+  );
+
+  _focusNode(existingId);
+  return;
+}
 
     final photoUrl = await _uploadPhotoIfNeeded(r.newPhotoBytes, 'parent');
     if (!mounted) return;
@@ -1218,32 +1354,53 @@ class _FamilyTreeScreenState extends State<FamilyTreeScreen> {
     );
     if (!mounted || !r.saved) return;
 
-    final name = (r.name ?? '').trim();
-    if (name.isEmpty) return;
+final name = (r.name ?? '').trim();
+if (name.isEmpty) return;
+
+// 🔍 check duplicate
+final existingId = _findNodeByExactName(name);
+if (existingId != null) {
+  ScaffoldMessenger.of(context).showSnackBar(
+    SnackBar(content: Text('$name already exists. Redirecting...')),
+  );
+
+  _focusNode(existingId);
+  return;
+}
 
     final photoUrl = await _uploadPhotoIfNeeded(r.newPhotoBytes, 'child');
     if (!mounted) return;
 
-    store.addChild(
-      fromNodeId: fromNodeId,
-      name: name,
-      childGender: r.gender,
-      birthday: r.clearBirthday ? null : r.birthday,
-      photoUrl: photoUrl,
-      photoBytes: null,
-      address: r.details.address,
-      phone: r.details.phone,
-      company: r.details.company,
-      jobTitle: r.details.jobTitle,
-      fb: r.details.fb,
-      ig: r.details.ig,
-      xAccount: r.details.xAccount,
-      tiktok: r.details.tiktok,
-    );
+    final child = store.addChild(
+  fromNodeId: fromNodeId,
+  name: name,
+  childGender: r.gender,
+  birthday: r.clearBirthday ? null : r.birthday,
+  photoUrl: photoUrl,
+  photoBytes: null,
+  address: r.details.address,
+  phone: r.details.phone,
+  company: r.details.company,
+  jobTitle: r.details.jobTitle,
+  fb: r.details.fb,
+  ig: r.details.ig,
+  xAccount: r.details.xAccount,
+  tiktok: r.details.tiktok,
+);
+
+// 📍 place directly below parent
+WidgetsBinding.instance.addPostFrameCallback((_) {
+  _placeNear(
+    child.id,
+    fromNodeId,
+    Offset(0, cardSize.height + 40),
+  );
+});
   }
 
   @override
   Widget build(BuildContext context) {
+    final TextEditingController searchController = TextEditingController();
     return AnimatedBuilder(
       animation: store,
       builder: (context, _) {
@@ -1275,16 +1432,39 @@ class _FamilyTreeScreenState extends State<FamilyTreeScreen> {
         final isEmpty = store.nodes.isEmpty;
 
         return Scaffold(
-          backgroundColor: const Color(0xFFF5F5F5),
-          
+          backgroundColor: _TreeGreenTheme.scaffold,
           appBar: AppBar(
-              surfaceTintColor: Colors.transparent,
-
-            title: const Text('Camello Family Tree'),
+            backgroundColor: _TreeGreenTheme.appBar,
+            foregroundColor: _TreeGreenTheme.primaryDark,
+            elevation: 0,
+            surfaceTintColor: Colors.transparent,
+            title: Row(
+  children: [
+    const Expanded(
+      child: Text('Camello Family Tree'),
+    ),
+    SizedBox(
+      width: 250,
+      child: TextField(
+        controller: searchController,
+        decoration: InputDecoration(
+          hintText: 'Search member...',
+          prefixIcon: const Icon(Icons.search),
+          contentPadding: const EdgeInsets.symmetric(horizontal: 10),
+          border: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(10),
+          ),
+          isDense: true,
+        ),
+        onSubmitted: _handleSearch,
+      ),
+    ),
+  ],
+),
             actions: [
               IconButton(
                 tooltip: 'Log out',
-                onPressed: _logout, 
+                onPressed: _logout,
                 icon: const Icon(Icons.logout),
               ),
             ],
@@ -1465,8 +1645,8 @@ class _FamilyTreeScreenState extends State<FamilyTreeScreen> {
                       opacity: _isDrawerOpen && _drawerRequest != null ? 1 : 0,
                       child: Material(
                         elevation: 16,
-                        shadowColor: Colors.black26,
-                        color: Colors.white,
+                        shadowColor: _TreeGreenTheme.shadow,
+                        color: _TreeGreenTheme.surface,
                         child: SafeArea(
                           child: _drawerRequest == null
                               ? const SizedBox.shrink()
@@ -1498,7 +1678,7 @@ class _FamilyTreeScreenState extends State<FamilyTreeScreen> {
                     child: Material(
                       elevation: 2,
                       borderRadius: BorderRadius.circular(18),
-                      color: Colors.white,
+                      color: _TreeGreenTheme.surface,
                       child: Padding(
                         padding: const EdgeInsets.fromLTRB(18, 16, 18, 16),
                         child: Column(
@@ -1513,7 +1693,7 @@ class _FamilyTreeScreenState extends State<FamilyTreeScreen> {
                             const SizedBox(height: 6),
                             Text(
                               'Add your first member to begin.',
-                              style: TextStyle(color: Colors.grey.shade700),
+                              style: const TextStyle(color: _TreeGreenTheme.textMuted),
                             ),
                             const SizedBox(height: 14),
                             FilledButton.icon(
@@ -1533,7 +1713,7 @@ class _FamilyTreeScreenState extends State<FamilyTreeScreen> {
                   bottom: 16,
                   child: Material(
                     elevation: 2,
-                    color: Colors.white,
+                    color: _TreeGreenTheme.surface,
                     borderRadius: BorderRadius.circular(16),
                     child: Padding(
                       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
@@ -1566,7 +1746,7 @@ class _FamilyTreeScreenState extends State<FamilyTreeScreen> {
                               },
                             ),
                             const SizedBox(width: 6),
-                            Container(width: 1, height: 22, color: const Color(0xFFE2E6EE)),
+                            Container(width: 1, height: 22, color: _TreeGreenTheme.divider),
                             const SizedBox(width: 6),
                             IconButton(
                               tooltip: 'Add standalone member',
@@ -1756,7 +1936,19 @@ class _MemberFormSidebarState extends State<_MemberFormSidebar> {
   InputDecoration _dec(String label, {IconData? icon}) {
     return InputDecoration(
       labelText: label,
-      prefixIcon: icon != null ? Icon(icon, size: 18) : null,
+      labelStyle: const TextStyle(color: _TreeGreenTheme.textMuted),
+      prefixIconConstraints: const BoxConstraints(minWidth: 42),
+      prefixIcon: icon != null ? Icon(icon, size: 18, color: _TreeGreenTheme.primary) : null,
+      filled: true,
+      fillColor: _TreeGreenTheme.softSurface,
+      enabledBorder: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(14),
+        borderSide: const BorderSide(color: _TreeGreenTheme.border),
+      ),
+      focusedBorder: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(14),
+        borderSide: const BorderSide(color: _TreeGreenTheme.primary, width: 1.4),
+      ),
       border: OutlineInputBorder(borderRadius: BorderRadius.circular(14)),
       isDense: true,
     );
@@ -1796,9 +1988,9 @@ class _MemberFormSidebarState extends State<_MemberFormSidebar> {
         width: 92,
         height: 92,
         decoration: BoxDecoration(
-          color: Colors.grey.shade100,
+          color: _TreeGreenTheme.softSurface,
           shape: BoxShape.circle,
-          border: Border.all(color: Colors.grey.shade300),
+          border: Border.all(color: _TreeGreenTheme.border),
         ),
         child: const Icon(Icons.person_outline, size: 34),
       );
@@ -1810,7 +2002,7 @@ class _MemberFormSidebarState extends State<_MemberFormSidebar> {
         height: 92,
         decoration: BoxDecoration(
           shape: BoxShape.circle,
-          border: Border.all(color: Colors.grey.shade300),
+          border: Border.all(color: _TreeGreenTheme.border),
           image: DecorationImage(
             image: MemoryImage(_newPhotoBytes!),
             fit: BoxFit.cover,
@@ -1825,7 +2017,7 @@ class _MemberFormSidebarState extends State<_MemberFormSidebar> {
         height: 92,
         decoration: BoxDecoration(
           shape: BoxShape.circle,
-          border: Border.all(color: Colors.grey.shade300),
+          border: Border.all(color: _TreeGreenTheme.border),
           image: DecorationImage(
             image: MemoryImage(widget.initialPhotoBytes!),
             fit: BoxFit.cover,
@@ -1840,7 +2032,7 @@ class _MemberFormSidebarState extends State<_MemberFormSidebar> {
         height: 92,
         decoration: BoxDecoration(
           shape: BoxShape.circle,
-          border: Border.all(color: Colors.grey.shade300),
+          border: Border.all(color: _TreeGreenTheme.border),
           image: DecorationImage(
             image: widget.initialPhotoProvider!,
             fit: BoxFit.cover,
@@ -1853,11 +2045,11 @@ class _MemberFormSidebarState extends State<_MemberFormSidebar> {
       width: 92,
       height: 92,
       decoration: BoxDecoration(
-        color: Colors.grey.shade100,
+        color: _TreeGreenTheme.softSurface,
         shape: BoxShape.circle,
-        border: Border.all(color: Colors.grey.shade300),
+        border: Border.all(color: _TreeGreenTheme.border),
       ),
-      child: Icon(_gender.icon, size: 34, color: Colors.grey.shade700),
+      child: Icon(_gender.icon, size: 34, color: _TreeGreenTheme.textMuted),
     );
   }
 
@@ -2023,10 +2215,10 @@ class _MemberFormSidebarState extends State<_MemberFormSidebar> {
         Container(
           padding: const EdgeInsets.fromLTRB(16, 12, 16, 16),
           decoration: BoxDecoration(
-            color: Colors.white,
+            color: _TreeGreenTheme.surface,
             boxShadow: [
               BoxShadow(
-                color: Colors.black.withAlpha(10),
+                color: _TreeGreenTheme.shadow.withAlpha(18),
                 blurRadius: 12,
                 offset: const Offset(0, -2),
               ),
@@ -2143,7 +2335,7 @@ class _AnimatedNodeState extends State<AnimatedNode> {
               borderRadius: BorderRadius.circular(16),
               boxShadow: [
                 BoxShadow(
-                  color: Colors.black.withAlpha(lifted ? 28 : 10),
+                  color: _TreeGreenTheme.shadow.withAlpha(lifted ? 38 : 18),
                   blurRadius: lifted ? 18 : 8,
                   offset: Offset(0, lifted ? 8 : 3),
                 ),
@@ -2255,13 +2447,13 @@ class MemberCard extends StatelessWidget {
     return Container(
       decoration: BoxDecoration(
         borderRadius: BorderRadius.circular(16),
-        border: isSelected ? Border.all(color: const Color(0xFF4C7DFF), width: 2) : null,
+        border: isSelected ? Border.all(color: _TreeGreenTheme.selection, width: 2) : null,
       ),
       child: Material(
         elevation: 2,
-        shadowColor: Colors.black12,
+        shadowColor: _TreeGreenTheme.shadow,
         borderRadius: BorderRadius.circular(16),
-        color: Colors.white,
+        color: _TreeGreenTheme.surface,
         child: Stack(
           clipBehavior: Clip.none,
           children: [
@@ -2278,43 +2470,43 @@ class MemberCard extends StatelessWidget {
                         mainAxisAlignment: MainAxisAlignment.center,
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-  Text(
-    node.name,
-    maxLines: 2,
-    softWrap: true,
-    overflow: TextOverflow.visible,
-    style: const TextStyle(
-      fontWeight: FontWeight.w700,
-      height: 1.15,
-    ),
-  ),
-  const SizedBox(height: 4),
-  if (node.birthday != null) ...[
-    const SizedBox(height: 2),
-    Row(
-      crossAxisAlignment: CrossAxisAlignment.center,
-      children: [
-        Icon(
-          Icons.cake,
-          size: 14,
-          color: Colors.grey.shade600,
-        ),
-        const SizedBox(width: 4),
-        Expanded(
-          child: Text(
-            formatDate(node.birthday!),
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-            style: TextStyle(
-              color: Colors.grey.shade600,
-              fontSize: 12,
-            ),
-          ),
-        ),
-      ],
-    ),
-  ],
-],
+                          Text(
+                            node.name,
+                            maxLines: 2,
+                            softWrap: true,
+                            overflow: TextOverflow.visible,
+                            style: const TextStyle(
+                              fontWeight: FontWeight.w700,
+                              height: 1.15,
+                            ),
+                          ),
+                          const SizedBox(height: 4),
+                          if (node.birthday != null) ...[
+                            const SizedBox(height: 2),
+                            Row(
+                              crossAxisAlignment: CrossAxisAlignment.center,
+                              children: [
+                                Icon(
+                                  Icons.cake,
+                                  size: 14,
+                                  color: _TreeGreenTheme.textMuted,
+                                ),
+                                const SizedBox(width: 4),
+                                Expanded(
+                                  child: Text(
+                                    formatDate(node.birthday!),
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: TextStyle(
+                                      color: _TreeGreenTheme.textMuted,
+                                      fontSize: 12,
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ],
+                        ],
                       ),
                     ),
                   ],
@@ -2393,8 +2585,8 @@ class _PopupActionButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final bg = enabled ? color.withAlpha(31) : Colors.grey.shade200;
-    final fg = enabled ? color : Colors.grey.shade500;
+    final bg = enabled ? color.withAlpha(31) : _TreeGreenTheme.softSurface;
+    final fg = enabled ? color : _TreeGreenTheme.textMuted;
 
     return InkWell(
       onTap: enabled ? onTap : null,
@@ -2406,7 +2598,7 @@ class _PopupActionButton extends StatelessWidget {
           color: bg,
           borderRadius: BorderRadius.circular(16),
           border: Border.all(
-            color: enabled ? color.withAlpha(51) : Colors.grey.shade300,
+            color: enabled ? color.withAlpha(51) : _TreeGreenTheme.border,
           ),
         ),
         child: Row(
@@ -2439,7 +2631,7 @@ class LinkPreviewPainter extends CustomPainter {
   @override
   void paint(Canvas canvas, Size size) {
     final paint = Paint()
-      ..color = const Color(0xFF6E7685)
+      ..color = _TreeGreenTheme.accent
       ..strokeWidth = 2
       ..style = PaintingStyle.stroke
       ..strokeCap = StrokeCap.round;
@@ -2452,7 +2644,7 @@ class LinkPreviewPainter extends CustomPainter {
       ..quadraticBezierTo(ctrl.dx, ctrl.dy, end.dx, end.dy);
 
     canvas.drawPath(path, paint);
-    canvas.drawCircle(end, 4.5, Paint()..color = const Color(0xFF6E7685));
+    canvas.drawCircle(end, 4.5, Paint()..color = _TreeGreenTheme.accent);
   }
 
   @override
@@ -2482,13 +2674,13 @@ class ConnectorPainter extends CustomPainter {
   @override
   void paint(Canvas canvas, Size size) {
     final paint = Paint()
-      ..color = const Color(0xFFB9C0CC)
+      ..color = _TreeGreenTheme.connector
       ..strokeWidth = 1.2
       ..style = PaintingStyle.stroke
       ..strokeCap = StrokeCap.round;
 
     final spousePaint = Paint()
-      ..color = const Color(0xFFB9C0CC)
+      ..color = _TreeGreenTheme.connector
       ..strokeWidth = 1.2
       ..style = PaintingStyle.stroke
       ..strokeCap = StrokeCap.round;
@@ -2583,7 +2775,7 @@ class ConnectorPainter extends CustomPainter {
         final heart = TextPainter(
           text: const TextSpan(
             text: '❤',
-            style: TextStyle(fontSize: 12, color: Color(0xFFB9C0CC)),
+            style: TextStyle(fontSize: 12, color: _TreeGreenTheme.connector),
           ),
           textDirection: TextDirection.ltr,
         )..layout();
