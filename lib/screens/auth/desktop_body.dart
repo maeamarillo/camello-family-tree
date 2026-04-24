@@ -1,7 +1,6 @@
 import 'package:app/screens/auth/auth_service.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
-import 'package:lucide_icons/lucide_icons.dart';
 
 class DesktopBody extends StatelessWidget {
   const DesktopBody({super.key});
@@ -106,13 +105,13 @@ class _LoginPageState extends State<LoginPage> {
           AuthTextField(
             controller: email,
             label: 'Username',
-            icon: LucideIcons.mail,
+            icon: Icons.mail,
           ),
           const SizedBox(height: 15),
           AuthTextField(
             controller: password,
             label: 'Password',
-            icon: LucideIcons.lock,
+            icon: Icons.lock,
             obscureText: !show,
             suffix: IconButton(
               onPressed: () => setState(() => show = !show),
@@ -209,13 +208,13 @@ class _RegisterPageState extends State<RegisterPage> {
           AuthTextField(
             controller: email,
             label: 'Username',
-            icon: LucideIcons.mail,
+            icon: Icons.mail,
           ),
           const SizedBox(height: 15),
           AuthTextField(
             controller: password,
             label: 'Password',
-            icon: LucideIcons.lock,
+            icon: Icons.lock,
             obscureText: !show,
             suffix: IconButton(
               onPressed: () => setState(() => show = !show),
