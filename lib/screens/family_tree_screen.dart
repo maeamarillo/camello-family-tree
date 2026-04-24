@@ -826,6 +826,7 @@ if (existingId != null) {
       xAccount: r.details.xAccount,
       tiktok: r.details.tiktok,
     );
+    
   }
 
   Future<void> _showDetailsPopup({
@@ -1243,26 +1244,43 @@ if (existingId != null) {
     if (!mounted) return;
 
     final added = store.addSpouse(
-      personId: personId,
-      name: name,
-      birthday: r.clearBirthday ? null : r.birthday,
-      photoUrl: photoUrl,
-      photoBytes: null,
-      address: r.details.address,
-      phone: r.details.phone,
-      company: r.details.company,
-      jobTitle: r.details.jobTitle,
-      fb: r.details.fb,
-      ig: r.details.ig,
-      xAccount: r.details.xAccount,
-      tiktok: r.details.tiktok,
-    );
+  personId: personId,
+  name: name,
+  birthday: r.clearBirthday ? null : r.birthday,
+  photoUrl: photoUrl,
+  photoBytes: null,
+  address: r.details.address,
+  phone: r.details.phone,
+  company: r.details.company,
+  jobTitle: r.details.jobTitle,
+  fb: r.details.fb,
+  ig: r.details.ig,
+  xAccount: r.details.xAccount,
+  tiktok: r.details.tiktok,
+);
 
-    if (added == null) {
-      messenger.showSnackBar(
-        const SnackBar(content: Text('Could not add spouse.')),
-      );
-    }
+if (added == null) {
+  messenger.showSnackBar(
+    const SnackBar(content: Text('Could not add spouse.')),
+  );
+  return;
+}
+
+// ✅ place spouse beside the person
+WidgetsBinding.instance.addPostFrameCallback((_) {
+  final person = store.getNode(personId);
+
+  final isMale = person.gender == Gender.male;
+
+  _placeNear(
+    added.id,
+    personId,
+    Offset(
+      isMale ? cardSize.width + 40 : -(cardSize.width + 40),
+      0,
+    ),
+  );
+});
   }
 
   Future<void> _addParentFlow({required int personId}) async {
@@ -1319,27 +1337,38 @@ if (existingId != null) {
     if (!mounted) return;
 
     final added = store.addParent(
-      personId: personId,
-      parentGender: r.gender,
-      name: name,
-      birthday: r.clearBirthday ? null : r.birthday,
-      photoUrl: photoUrl,
-      photoBytes: null,
-      address: r.details.address,
-      phone: r.details.phone,
-      company: r.details.company,
-      jobTitle: r.details.jobTitle,
-      fb: r.details.fb,
-      ig: r.details.ig,
-      xAccount: r.details.xAccount,
-      tiktok: r.details.tiktok,
-    );
+  personId: personId,
+  parentGender: r.gender,
+  name: name,
+  birthday: r.clearBirthday ? null : r.birthday,
+  photoUrl: photoUrl,
+  photoBytes: null,
+  address: r.details.address,
+  phone: r.details.phone,
+  company: r.details.company,
+  jobTitle: r.details.jobTitle,
+  fb: r.details.fb,
+  ig: r.details.ig,
+  xAccount: r.details.xAccount,
+  tiktok: r.details.tiktok,
+);
 
-    if (added == null) {
-      messenger.showSnackBar(
-        const SnackBar(content: Text('Could not add parent (blocked).')),
-      );
-    }
+if (added == null) {
+  messenger.showSnackBar(
+    const SnackBar(content: Text('Could not add parent (blocked).')),
+  );
+  return;
+}
+
+// ✅ move parent near the child
+WidgetsBinding.instance.addPostFrameCallback((_) {
+  _placeNear(
+    added.id,
+    personId,
+    Offset(0, -(cardSize.height + 40)), // above the child
+  );
+});
+    
   }
 
   Future<void> _addChildFlow({required int fromNodeId}) async {
