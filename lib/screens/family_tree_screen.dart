@@ -131,6 +131,8 @@ class _MemberFormDrawerRequest {
 class _FamilyTreeScreenState extends State<FamilyTreeScreen> {
   late final FamilyTreeStore store;
   final CloudinaryService _cloudinary = CloudinaryService();
+  bool _previewMode = false;
+bool _isLoading = true;
 
   static const Size cardSize = Size(220, 84);
   static const double hGap = 40;
@@ -293,20 +295,73 @@ void _placeNear(int newId, int targetId, Offset offset) {
   store.addManualOffset(newId, delta);
 }
 
-  Future<void> _ensureLoadedFromCloud() async {
-    if (_loadedOnce) return;
-    final user = FirebaseAuth.instance.currentUser;
-    if (user == null) return;
+Future<void> _ensureLoadedFromCloud() async {
+  if (_loadedOnce) return;
+  final user = FirebaseAuth.instance.currentUser;
+  if (user == null) return;
 
-    _loadedOnce = true;
-    try {
-      await store.loadFromCloud(treeId: 'default');
-      debugPrint('✅ RTDB loaded. nodes=${store.nodes.length}');
-    } catch (e) {
-      debugPrint('❌ loadFromCloud error: $e');
-      _loadedOnce = false;
-    }
+  setState(() => _isLoading = true);
+
+  _loadedOnce = true;
+  try {
+    await store.loadFromCloud(treeId: 'default');
+    debugPrint('✅ RTDB loaded. nodes=${store.nodes.length}');
+  } catch (e) {
+    debugPrint('❌ loadFromCloud error: $e');
+    _loadedOnce = false;
   }
+
+  if (mounted) {
+    setState(() => _isLoading = false);
+  }
+}
+
+Widget buildClickableRelation({
+  required String label,
+  required List<int> ids,
+}) {
+  if (ids.isEmpty) return const SizedBox();
+
+  return Padding(
+    padding: const EdgeInsets.only(bottom: 10),
+    child: Wrap(
+      crossAxisAlignment: WrapCrossAlignment.center,
+      spacing: 6,
+      runSpacing: 4,
+      children: [
+        Text(
+          '$label:',
+          style: const TextStyle(fontWeight: FontWeight.w600),
+        ),
+        ...ids.map((id) {
+          final n = store.getNode(id);
+          return InkWell(
+            borderRadius: BorderRadius.circular(6),
+            onTap: () {
+              Navigator.pop(context); // close popup
+              _focusNode(id);         // 🔥 focus node
+            },
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+              decoration: BoxDecoration(
+                color: _TreeGreenTheme.softSurface,
+                borderRadius: BorderRadius.circular(6),
+                border: Border.all(color: _TreeGreenTheme.border),
+              ),
+              child: Text(
+                n.name,
+                style: const TextStyle(
+                  fontSize: 13,
+                  color: _TreeGreenTheme.primary,
+                ),
+              ),
+            ),
+          );
+        }),
+      ],
+    ),
+  );
+}
 
   void _toggleCtrlSelect(int id) {
     setState(() {
@@ -467,8 +522,10 @@ void _placeNear(int newId, int targetId, Offset offset) {
     required LinkPort port,
     required Offset startScene,
     required Offset startViewport,
+    
   }) {
     setState(() {
+      if (_previewMode) return; 
       _isLinking = true;
       _linkFromNodeId = fromNodeId;
       _linkPort = port;
@@ -573,6 +630,7 @@ void _placeNear(int newId, int targetId, Offset offset) {
 
   Future<void> _handlePortTap(int nodeId, LinkPort port) async {
     if (_isLinking) return;
+    if (_previewMode) return;
 
     if (_ctrlSelectedIds.isNotEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -829,158 +887,198 @@ if (existingId != null) {
     
   }
 
-  Future<void> _showDetailsPopup({
-    required int nodeId,
-    required Offset globalTapPosition,
-  }) async {
-    final node = store.getNode(nodeId);
+Future<void> _showDetailsPopup({
+  required int nodeId,
+  required Offset globalTapPosition,
+}) async {
+  final node = store.getNode(nodeId);
 
-    String? line(String label, String? value) {
-      final v = (value ?? '').trim();
-      if (v.isEmpty) return null;
-      return '$label: $v';
-    }
+  // 🔹 Parents (IDs)
+  final parentIds = node.parents.toList();
+  final childrenIds = node.children.toList();
 
-    final lines = <String>[
-      if (node.birthday != null) 'Birthday: ${formatDate(node.birthday!)}',
-      ...[
-        line('Address', node.address),
-        line('Phone', node.phone),
-        line('Company', node.company),
-        line('Job Title', node.jobTitle),
-        line('Facebook', node.fb),
-        line('Instagram', node.ig),
-        line('X', node.xAccount),
-        line('TikTok', node.tiktok),
-      ].whereType<String>(),
-    ];
+  // 🔹 Siblings (same parents)
+  final siblingIds = store.nodes.values
+      .where((n) =>
+          n.id != node.id &&
+          n.parents.any((p) => node.parents.contains(p)))
+      .map((n) => n.id)
+      .toList();
 
-    final overlay = Overlay.of(context).context.findRenderObject() as RenderBox;
 
-    final position = RelativeRect.fromRect(
-      Rect.fromLTWH(globalTapPosition.dx, globalTapPosition.dy, 1, 1),
-      Offset.zero & overlay.size,
-    );
 
-    await showMenu<String>(
-      context: context,
-      position: position,
-      color: Colors.transparent,
-      elevation: 0,
-      constraints: const BoxConstraints(minWidth: 300, maxWidth: 340),
-      items: [
-        PopupMenuItem<String>(
-          value: '__details__',
-          enabled: false,
-          padding: EdgeInsets.zero,
-          child: Container(
-            width: 320,
-            padding: const EdgeInsets.all(16),
-            decoration: BoxDecoration(
-              color: _TreeGreenTheme.surface,
-              borderRadius: BorderRadius.circular(24),
-              border: Border.all(color: _TreeGreenTheme.border),
-              boxShadow: [
-                BoxShadow(
-                  color: _TreeGreenTheme.shadow,
-                  blurRadius: 18,
-                  offset: const Offset(0, 8),
-                ),
-              ],
-            ),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
-                  children: [
-                    GestureDetector(
-                      onTap: node.hasPhoto ? () => _viewPhotoFullScreen(node) : null,
-                      child: Container(
-                        width: 52,
-                        height: 52,
-                        decoration: BoxDecoration(
-                          shape: BoxShape.circle,
-                          color: !node.hasPhoto ? node.gender.tone : null,
-                          border: Border.all(color: _TreeGreenTheme.border, width: 1),
-                        ),
-                        child: !node.hasPhoto
-                            ? Icon(node.gender.icon, size: 26, color: _TreeGreenTheme.textMuted)
-                            : ClipOval(
-                                child: Image(image: node.photoProvider, fit: BoxFit.cover),
-                              ),
+  String? line(String label, String? value) {
+    final v = (value ?? '').trim();
+    if (v.isEmpty) return null;
+    return '$label: $v';
+  }
+
+  final infoLines = <String>[
+    if (node.birthday != null) 'Birthday: ${formatDate(node.birthday!)}',
+    ...[
+      line('Address', node.address),
+      line('Phone', node.phone),
+      line('Company', node.company),
+      line('Job Title', node.jobTitle),
+      line('Facebook', node.fb),
+      line('Instagram', node.ig),
+      line('X', node.xAccount),
+      line('TikTok', node.tiktok),
+    ].whereType<String>(),
+  ];
+
+  final overlay = Overlay.of(context).context.findRenderObject() as RenderBox;
+
+  final position = RelativeRect.fromRect(
+    Rect.fromLTWH(globalTapPosition.dx, globalTapPosition.dy, 1, 1),
+    Offset.zero & overlay.size,
+  );
+
+  await showMenu<String>(
+    context: context,
+    position: position,
+    color: Colors.transparent,
+    elevation: 0,
+    constraints: const BoxConstraints(minWidth: 300, maxWidth: 340),
+    items: [
+      PopupMenuItem<String>(
+        value: '__details__',
+        enabled: false,
+        padding: EdgeInsets.zero,
+        child: Container(
+          width: 320,
+          padding: const EdgeInsets.all(16),
+          decoration: BoxDecoration(
+            color: _TreeGreenTheme.surface,
+            borderRadius: BorderRadius.circular(24),
+            border: Border.all(color: _TreeGreenTheme.border),
+            boxShadow: [
+              BoxShadow(
+                color: _TreeGreenTheme.shadow,
+                blurRadius: 18,
+                offset: const Offset(0, 8),
+              ),
+            ],
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              /// 🔹 HEADER
+              Row(
+                children: [
+                  GestureDetector(
+                    onTap: node.hasPhoto
+                        ? () => _viewPhotoFullScreen(node)
+                        : null,
+                    child: Container(
+                      width: 52,
+                      height: 52,
+                      decoration: BoxDecoration(
+                        shape: BoxShape.circle,
+                        color: !node.hasPhoto ? node.gender.tone : null,
+                        border: Border.all(color: _TreeGreenTheme.border),
                       ),
-                    ),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            node.name,
-                            style: const TextStyle(
-                              fontSize: 18,
-                              fontWeight: FontWeight.w700,
-                            ),
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                          ),
-                          const SizedBox(height: 4),
-                          Row(
-                            children: [
-                              Icon(node.gender.icon, size: 14, color: _TreeGreenTheme.textMuted),
-                              const SizedBox(width: 4),
-                              Flexible(
-                                child: Text(
-                                  node.gender.label,
-                                  style: TextStyle(
-                                    color: _TreeGreenTheme.textMuted,
-                                    fontSize: 12,
-                                  ),
-                                  overflow: TextOverflow.ellipsis,
-                                ),
-                              ),
-                            ],
-                          ),
-                        ],
-                      ),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 14),
-                if (lines.isEmpty)
-                  Text(
-                    'No additional details provided.',
-                    style: const TextStyle(color: _TreeGreenTheme.textMuted),
-                  )
-                else
-                  ConstrainedBox(
-                    constraints: BoxConstraints(
-                      maxHeight: MediaQuery.of(context).size.height * 0.42,
-                    ),
-                    child: SingleChildScrollView(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          for (final t in lines)
-                            Padding(
-                              padding: const EdgeInsets.only(bottom: 10),
-                              child: Text(
-                                t,
-                                style: const TextStyle(fontSize: 14, height: 1.25),
+                      child: !node.hasPhoto
+                          ? Icon(node.gender.icon,
+                              size: 26,
+                              color: _TreeGreenTheme.textMuted)
+                          : ClipOval(
+                              child: Image(
+                                image: node.photoProvider,
+                                fit: BoxFit.cover,
                               ),
                             ),
-                        ],
-                      ),
                     ),
                   ),
-              ],
-            ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          node.name,
+                          style: const TextStyle(
+                            fontSize: 18,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                        const SizedBox(height: 4),
+                        Row(
+                          children: [
+                            Icon(node.gender.icon,
+                                size: 14,
+                                color: _TreeGreenTheme.textMuted),
+                            const SizedBox(width: 4),
+                            Text(
+                              node.gender.label,
+                              style: const TextStyle(
+                                fontSize: 12,
+                                color: _TreeGreenTheme.textMuted,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+
+              const SizedBox(height: 14),
+
+              /// 🔥 RELATIONSHIPS (CLICKABLE)
+              /// 🔥 RELATIONSHIPS (CLICKABLE)
+if (parentIds.isNotEmpty)
+  buildClickableRelation(label: 'Parents', ids: parentIds),
+
+if (siblingIds.isNotEmpty)
+  buildClickableRelation(label: 'Siblings', ids: siblingIds),
+
+if (childrenIds.isNotEmpty)
+  buildClickableRelation(label: 'Children', ids: childrenIds),
+
+if (parentIds.isNotEmpty ||
+    siblingIds.isNotEmpty ||
+    childrenIds.isNotEmpty)
+  const SizedBox(height: 6),
+
+              /// 🔹 DETAILS
+              if (infoLines.isEmpty)
+                const Text(
+                  'No additional details provided.',
+                  style: TextStyle(color: _TreeGreenTheme.textMuted),
+                )
+              else
+                ConstrainedBox(
+                  constraints: BoxConstraints(
+                    maxHeight: MediaQuery.of(context).size.height * 0.4,
+                  ),
+                  child: SingleChildScrollView(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        for (final t in infoLines)
+                          Padding(
+                            padding: const EdgeInsets.only(bottom: 10),
+                            child: Text(
+                              t,
+                              style: const TextStyle(fontSize: 14),
+                            ),
+                          ),
+                      ],
+                    ),
+                  ),
+                ),
+            ],
           ),
         ),
-      ],
-    );
-  }
+      ),
+    ],
+  );
+}
+
+
 
   Future<void> _openNodeActions({
     required int nodeId,
@@ -1488,6 +1586,17 @@ WidgetsBinding.instance.addPostFrameCallback((_) {
         onSubmitted: _handleSearch,
       ),
     ),
+    IconButton(
+  tooltip: _previewMode ? 'Exit Preview Mode' : 'Preview Mode',
+  icon: Icon(
+    _previewMode ? Icons.visibility_off : Icons.visibility,
+  ),
+  onPressed: () {
+    setState(() {
+      _previewMode = !_previewMode;
+    });
+  },
+),
   ],
 ),
             actions: [
@@ -1538,6 +1647,7 @@ WidgetsBinding.instance.addPostFrameCallback((_) {
                             ),
                           for (final entry in layout.entries)
                             AnimatedNode(
+                              
                               node: store.getNode(entry.key),
                               topLeft: entry.value,
                               size: cardSize,
@@ -1546,8 +1656,8 @@ WidgetsBinding.instance.addPostFrameCallback((_) {
                                   entry.key == _hoveredNodeId ||
                                   (_isLinking && _linkFromNodeId == entry.key),
                               isDragging: _draggingNodeId == entry.key,
-                              dragEnabled: !_isLinking,
-                              showPortsEnabled: store.canEditNodeId(entry.key),
+                              dragEnabled: !_isLinking && !_previewMode,
+                              showPortsEnabled: !_previewMode && store.canEditNodeId(entry.key),
                               onHoverChanged: (hovering) {
                                 if (!mounted) return;
                                 setState(() {
@@ -1559,29 +1669,35 @@ WidgetsBinding.instance.addPostFrameCallback((_) {
                                 });
                               },
                               onTapSelect: (id, globalPosition) {
-                                if (_isLinking) return;
+  if (_previewMode) {
+    _showDetailsPopup(
+      nodeId: id,
+      globalTapPosition: globalPosition,
+    );
+    return;
+  }
 
-                                if (_ctrlPressed) {
-                                  _toggleCtrlSelect(id);
-                                  return;
-                                }
+  if (_isLinking) return;
 
-                                if (_ctrlSelectedIds.isNotEmpty) {
-                                  ScaffoldMessenger.of(context).showSnackBar(
-                                    const SnackBar(
-                                      content: Text(
-                                        'Selection active. Ctrl+Click tiles to unselect.',
-                                      ),
-                                    ),
-                                  );
-                                  return;
-                                }
+  if (_ctrlPressed) {
+    _toggleCtrlSelect(id);
+    return;
+  }
 
-                                _openNodeActions(
-                                  nodeId: id,
-                                  globalTapPosition: globalPosition,
-                                );
-                              },
+  if (_ctrlSelectedIds.isNotEmpty) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text('Selection active. Ctrl+Click tiles to unselect.'),
+      ),
+    );
+    return;
+  }
+
+  _openNodeActions(
+    nodeId: id,
+    globalTapPosition: globalPosition,
+  );
+},
                               onDragStart: () {
                                 if (_isLinking) return;
 
@@ -1632,6 +1748,7 @@ WidgetsBinding.instance.addPostFrameCallback((_) {
                                   port: port,
                                   startScene: startScene,
                                   startViewport: _globalToViewport(globalStart),
+                                  
                                 );
                               },
                               onUpdatePortDrag: (g) => _updateLink(_globalToViewport(g)),
@@ -1700,42 +1817,46 @@ WidgetsBinding.instance.addPostFrameCallback((_) {
                   ),
                 ),
               ),
-              if (isEmpty)
-                Center(
-                  child: Padding(
-                    padding: const EdgeInsets.all(18),
-                    child: Material(
-                      elevation: 2,
-                      borderRadius: BorderRadius.circular(18),
-                      color: _TreeGreenTheme.surface,
-                      child: Padding(
-                        padding: const EdgeInsets.fromLTRB(18, 16, 18, 16),
-                        child: Column(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            const Icon(Icons.account_tree, size: 42),
-                            const SizedBox(height: 10),
-                            const Text(
-                              'Start your family tree',
-                              style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700),
-                            ),
-                            const SizedBox(height: 6),
-                            Text(
-                              'Add your first member to begin.',
-                              style: const TextStyle(color: _TreeGreenTheme.textMuted),
-                            ),
-                            const SizedBox(height: 14),
-                            FilledButton.icon(
-                              onPressed: _addFirstMemberFlow,
-                              icon: const Icon(Icons.person_add),
-                              label: const Text('Add First Member'),
-                            ),
-                          ],
-                        ),
-                      ),
-                    ),
-                  ),
-                ),
+              if (_isLoading)
+  const Center(
+    child: CircularProgressIndicator(),
+  )
+else if (isEmpty)
+  Center(
+    child: Padding(
+      padding: const EdgeInsets.all(18),
+      child: Material(
+        elevation: 2,
+        borderRadius: BorderRadius.circular(18),
+        color: _TreeGreenTheme.surface,
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(18, 16, 18, 16),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Icon(Icons.account_tree, size: 42),
+              const SizedBox(height: 10),
+              const Text(
+                'Start your family tree',
+                style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700),
+              ),
+              const SizedBox(height: 6),
+              Text(
+                'Add your first member to begin.',
+                style: const TextStyle(color: _TreeGreenTheme.textMuted),
+              ),
+              const SizedBox(height: 14),
+              FilledButton.icon(
+                onPressed: _addFirstMemberFlow,
+                icon: const Icon(Icons.person_add),
+                label: const Text('Add First Member'),
+              ),
+            ],
+          ),
+        ),
+      ),
+    ),
+  ),
               if (!isEmpty)
                 Positioned(
                   right: 16,
