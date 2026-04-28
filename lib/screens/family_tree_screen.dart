@@ -1938,7 +1938,7 @@ else if (isEmpty)
   void _fitToScreen(Rect bounds) {
     final screenSize = MediaQuery.of(context).size;
     final scale =
-        min(screenSize.width / bounds.width, screenSize.height / bounds.height) * 0.8;
+        min(screenSize.width / bounds.width, screenSize.height / bounds.height) * 1.0;
 
     _syncingFromController = true;
     _tc.value = Matrix4.identity()
