@@ -132,7 +132,7 @@ class _FamilyTreeScreenState extends State<FamilyTreeScreen> {
   late final FamilyTreeStore store;
   final CloudinaryService _cloudinary = CloudinaryService();
   bool _previewMode = false;
-bool _isLoading = true;
+  bool _isLoading = true;
 
   static const Size cardSize = Size(220, 84);
   static const double hGap = 40;
@@ -169,6 +169,9 @@ bool _isLoading = true;
 
   _MemberFormDrawerRequest? _drawerRequest;
   Completer<MemberFormResult>? _drawerCompleter;
+
+  // 🔑 Key to correctly convert coordinates when the tree is shifted
+  final GlobalKey _viewerContainerKey = GlobalKey();
 
   bool get _isDrawerOpen => _drawerRequest != null;
 
@@ -224,144 +227,143 @@ bool _isLoading = true;
   }
 
   int? _searchNodeId(String query) {
-  final q = query.toLowerCase().trim();
+    final q = query.toLowerCase().trim();
 
-  for (final entry in store.nodes.entries) {
-    final node = entry.value;
-    if (node.name.toLowerCase().contains(q)) {
-      return entry.key;
+    for (final entry in store.nodes.entries) {
+      final node = entry.value;
+      if (node.name.toLowerCase().contains(q)) {
+        return entry.key;
+      }
+    }
+
+    return null;
+  }
+
+  void _focusNode(int nodeId) {
+    final pos = _lastLayoutScene[nodeId];
+    if (pos == null) return;
+
+    final screenSize = MediaQuery.of(context).size;
+    final viewportCenter = Offset(screenSize.width / 2, screenSize.height / 2);
+    final nodeCenter = pos + Offset(cardSize.width / 2, cardSize.height / 2);
+
+    _syncingFromController = true;
+
+    _tc.value = Matrix4.identity()
+      ..translate(viewportCenter.dx, viewportCenter.dy)
+      ..scale(_zoomValue)
+      ..translate(-nodeCenter.dx, -nodeCenter.dy);
+
+    _syncingFromController = false;
+
+    setState(() {
+      _hoveredNodeId = nodeId;
+    });
+  }
+
+  void _handleSearch(String query) {
+    final id = _searchNodeId(query);
+
+    if (id == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Member not found')),
+      );
+      return;
+    }
+
+    _focusNode(id);
+  }
+
+  int? _findNodeByExactName(String name) {
+    final q = name.toLowerCase().trim();
+
+    for (final entry in store.nodes.entries) {
+      if (entry.value.name.toLowerCase().trim() == q) {
+        return entry.key;
+      }
+    }
+    return null;
+  }
+
+  void _placeNear(int newId, int targetId, Offset offset) {
+    final targetPos = _lastLayoutScene[targetId];
+    final newPos = _lastLayoutScene[newId];
+
+    if (targetPos == null || newPos == null) return;
+
+    final desired = targetPos + offset;
+    final delta = desired - newPos;
+
+    store.addManualOffset(newId, delta);
+  }
+
+  Future<void> _ensureLoadedFromCloud() async {
+    if (_loadedOnce) return;
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) return;
+
+    setState(() => _isLoading = true);
+
+    _loadedOnce = true;
+    try {
+      await store.loadFromCloud(treeId: 'default');
+      debugPrint('✅ RTDB loaded. nodes=${store.nodes.length}');
+    } catch (e) {
+      debugPrint('❌ loadFromCloud error: $e');
+      _loadedOnce = false;
+    }
+
+    if (mounted) {
+      setState(() => _isLoading = false);
     }
   }
 
-  return null;
-}
+  Widget buildClickableRelation({
+    required String label,
+    required List<int> ids,
+  }) {
+    if (ids.isEmpty) return const SizedBox();
 
-void _focusNode(int nodeId) {
-  final pos = _lastLayoutScene[nodeId];
-  if (pos == null) return;
-
-  final screenSize = MediaQuery.of(context).size;
-  final viewportCenter = Offset(screenSize.width / 2, screenSize.height / 2);
-
-  final nodeCenter = pos + Offset(cardSize.width / 2, cardSize.height / 2);
-
-  _syncingFromController = true;
-
-  _tc.value = Matrix4.identity()
-    ..translate(viewportCenter.dx, viewportCenter.dy)
-    ..scale(_zoomValue)
-    ..translate(-nodeCenter.dx, -nodeCenter.dy);
-
-  _syncingFromController = false;
-
-  setState(() {
-    _hoveredNodeId = nodeId; // highlight
-  });
-}
-
-void _handleSearch(String query) {
-  final id = _searchNodeId(query);
-
-  if (id == null) {
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('Member not found')),
-    );
-    return;
-  }
-
-  _focusNode(id);
-}
-
-int? _findNodeByExactName(String name) {
-  final q = name.toLowerCase().trim();
-
-  for (final entry in store.nodes.entries) {
-    if (entry.value.name.toLowerCase().trim() == q) {
-      return entry.key;
-    }
-  }
-  return null;
-}
-
-void _placeNear(int newId, int targetId, Offset offset) {
-  final targetPos = _lastLayoutScene[targetId];
-  final newPos = _lastLayoutScene[newId];
-
-  if (targetPos == null || newPos == null) return;
-
-  final desired = targetPos + offset;
-  final delta = desired - newPos;
-
-  store.addManualOffset(newId, delta);
-}
-
-Future<void> _ensureLoadedFromCloud() async {
-  if (_loadedOnce) return;
-  final user = FirebaseAuth.instance.currentUser;
-  if (user == null) return;
-
-  setState(() => _isLoading = true);
-
-  _loadedOnce = true;
-  try {
-    await store.loadFromCloud(treeId: 'default');
-    debugPrint('✅ RTDB loaded. nodes=${store.nodes.length}');
-  } catch (e) {
-    debugPrint('❌ loadFromCloud error: $e');
-    _loadedOnce = false;
-  }
-
-  if (mounted) {
-    setState(() => _isLoading = false);
-  }
-}
-
-Widget buildClickableRelation({
-  required String label,
-  required List<int> ids,
-}) {
-  if (ids.isEmpty) return const SizedBox();
-
-  return Padding(
-    padding: const EdgeInsets.only(bottom: 10),
-    child: Wrap(
-      crossAxisAlignment: WrapCrossAlignment.center,
-      spacing: 6,
-      runSpacing: 4,
-      children: [
-        Text(
-          '$label:',
-          style: const TextStyle(fontWeight: FontWeight.w600),
-        ),
-        ...ids.map((id) {
-          final n = store.getNode(id);
-          return InkWell(
-            borderRadius: BorderRadius.circular(6),
-            onTap: () {
-              Navigator.pop(context); // close popup
-              _focusNode(id);         // 🔥 focus node
-            },
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-              decoration: BoxDecoration(
-                color: _TreeGreenTheme.softSurface,
-                borderRadius: BorderRadius.circular(6),
-                border: Border.all(color: _TreeGreenTheme.border),
-              ),
-              child: Text(
-                n.name,
-                style: const TextStyle(
-                  fontSize: 13,
-                  color: _TreeGreenTheme.primary,
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 10),
+      child: Wrap(
+        crossAxisAlignment: WrapCrossAlignment.center,
+        spacing: 6,
+        runSpacing: 4,
+        children: [
+          Text(
+            '$label:',
+            style: const TextStyle(fontWeight: FontWeight.w600),
+          ),
+          ...ids.map((id) {
+            final n = store.getNode(id);
+            return InkWell(
+              borderRadius: BorderRadius.circular(6),
+              onTap: () {
+                Navigator.pop(context);
+                _focusNode(id);
+              },
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                decoration: BoxDecoration(
+                  color: _TreeGreenTheme.softSurface,
+                  borderRadius: BorderRadius.circular(6),
+                  border: Border.all(color: _TreeGreenTheme.border),
+                ),
+                child: Text(
+                  n.name,
+                  style: const TextStyle(
+                    fontSize: 13,
+                    color: _TreeGreenTheme.primary,
+                  ),
                 ),
               ),
-            ),
-          );
-        }),
-      ],
-    ),
-  );
-}
+            );
+          }),
+        ],
+      ),
+    );
+  }
 
   void _toggleCtrlSelect(int id) {
     setState(() {
@@ -482,8 +484,10 @@ Widget buildClickableRelation({
     return Offset(o.dx, o.dy);
   }
 
+  /// Correctly converts a global pointer position to the shifted container's local coordinates.
   Offset _globalToViewport(Offset global) {
-    final box = context.findRenderObject() as RenderBox?;
+    final box =
+        _viewerContainerKey.currentContext?.findRenderObject() as RenderBox?;
     if (box == null) return Offset.zero;
     return box.globalToLocal(global);
   }
@@ -522,10 +526,9 @@ Widget buildClickableRelation({
     required LinkPort port,
     required Offset startScene,
     required Offset startViewport,
-    
   }) {
     setState(() {
-      if (_previewMode) return; 
+      if (_previewMode) return;
       _isLinking = true;
       _linkFromNodeId = fromNodeId;
       _linkPort = port;
@@ -806,19 +809,17 @@ Widget buildClickableRelation({
     );
     if (!mounted || !r.saved) return;
 
-final name = (r.name ?? '').trim();
-if (name.isEmpty) return;
+    final name = (r.name ?? '').trim();
+    if (name.isEmpty) return;
 
-// 🔍 check duplicate
-final existingId = _findNodeByExactName(name);
-if (existingId != null) {
-  ScaffoldMessenger.of(context).showSnackBar(
-    SnackBar(content: Text('$name already exists. Redirecting...')),
-  );
-
-  _focusNode(existingId);
-  return;
-}
+    final existingId = _findNodeByExactName(name);
+    if (existingId != null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('$name already exists. Redirecting...')),
+      );
+      _focusNode(existingId);
+      return;
+    }
 
     final photoUrl = await _uploadPhotoIfNeeded(r.newPhotoBytes, 'member');
     if (!mounted) return;
@@ -852,19 +853,17 @@ if (existingId != null) {
     );
     if (!mounted || !r.saved) return;
 
-final name = (r.name ?? '').trim();
-if (name.isEmpty) return;
+    final name = (r.name ?? '').trim();
+    if (name.isEmpty) return;
 
-// 🔍 check duplicate
-final existingId = _findNodeByExactName(name);
-if (existingId != null) {
-  ScaffoldMessenger.of(context).showSnackBar(
-    SnackBar(content: Text('$name already exists. Redirecting...')),
-  );
-
-  _focusNode(existingId);
-  return;
-}
+    final existingId = _findNodeByExactName(name);
+    if (existingId != null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('$name already exists. Redirecting...')),
+      );
+      _focusNode(existingId);
+      return;
+    }
 
     final photoUrl = await _uploadPhotoIfNeeded(r.newPhotoBytes, 'member');
     if (!mounted) return;
@@ -884,201 +883,191 @@ if (existingId != null) {
       xAccount: r.details.xAccount,
       tiktok: r.details.tiktok,
     );
-    
   }
 
-Future<void> _showDetailsPopup({
-  required int nodeId,
-  required Offset globalTapPosition,
-}) async {
-  final node = store.getNode(nodeId);
+  Future<void> _showDetailsPopup({
+    required int nodeId,
+    required Offset globalTapPosition,
+  }) async {
+    final node = store.getNode(nodeId);
 
-  // 🔹 Parents (IDs)
-  final parentIds = node.parents.toList();
-  final childrenIds = node.children.toList();
+    final parentIds = node.parents.toList();
+    final childrenIds = node.children.toList();
 
-  // 🔹 Siblings (same parents)
-  final siblingIds = store.nodes.values
-      .where((n) =>
-          n.id != node.id &&
-          n.parents.any((p) => node.parents.contains(p)))
-      .map((n) => n.id)
-      .toList();
+    final siblingIds = store.nodes.values
+        .where((n) =>
+            n.id != node.id &&
+            n.parents.any((p) => node.parents.contains(p)))
+        .map((n) => n.id)
+        .toList();
 
+    String? line(String label, String? value) {
+      final v = (value ?? '').trim();
+      if (v.isEmpty) return null;
+      return '$label: $v';
+    }
 
+    final infoLines = <String>[
+      if (node.birthday != null) 'Birthday: ${formatDate(node.birthday!)}',
+      ...[
+        line('Address', node.address),
+        line('Phone', node.phone),
+        line('Company', node.company),
+        line('Job Title', node.jobTitle),
+        line('Facebook', node.fb),
+        line('Instagram', node.ig),
+        line('X', node.xAccount),
+        line('TikTok', node.tiktok),
+      ].whereType<String>(),
+    ];
 
-  String? line(String label, String? value) {
-    final v = (value ?? '').trim();
-    if (v.isEmpty) return null;
-    return '$label: $v';
-  }
+    final overlay = Overlay.of(context).context.findRenderObject() as RenderBox;
 
-  final infoLines = <String>[
-    if (node.birthday != null) 'Birthday: ${formatDate(node.birthday!)}',
-    ...[
-      line('Address', node.address),
-      line('Phone', node.phone),
-      line('Company', node.company),
-      line('Job Title', node.jobTitle),
-      line('Facebook', node.fb),
-      line('Instagram', node.ig),
-      line('X', node.xAccount),
-      line('TikTok', node.tiktok),
-    ].whereType<String>(),
-  ];
+    final position = RelativeRect.fromRect(
+      Rect.fromLTWH(globalTapPosition.dx, globalTapPosition.dy, 1, 1),
+      Offset.zero & overlay.size,
+    );
 
-  final overlay = Overlay.of(context).context.findRenderObject() as RenderBox;
-
-  final position = RelativeRect.fromRect(
-    Rect.fromLTWH(globalTapPosition.dx, globalTapPosition.dy, 1, 1),
-    Offset.zero & overlay.size,
-  );
-
-  await showMenu<String>(
-    context: context,
-    position: position,
-    color: Colors.transparent,
-    elevation: 0,
-    constraints: const BoxConstraints(minWidth: 300, maxWidth: 340),
-    items: [
-      PopupMenuItem<String>(
-        value: '__details__',
-        enabled: false,
-        padding: EdgeInsets.zero,
-        child: Container(
-          width: 320,
-          padding: const EdgeInsets.all(16),
-          decoration: BoxDecoration(
-            color: _TreeGreenTheme.surface,
-            borderRadius: BorderRadius.circular(24),
-            border: Border.all(color: _TreeGreenTheme.border),
-            boxShadow: [
-              BoxShadow(
-                color: _TreeGreenTheme.shadow,
-                blurRadius: 18,
-                offset: const Offset(0, 8),
-              ),
-            ],
-          ),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              /// 🔹 HEADER
-              Row(
-                children: [
-                  GestureDetector(
-                    onTap: node.hasPhoto
-                        ? () => _viewPhotoFullScreen(node)
-                        : null,
-                    child: Container(
-                      width: 52,
-                      height: 52,
-                      decoration: BoxDecoration(
-                        shape: BoxShape.circle,
-                        color: !node.hasPhoto ? node.gender.tone : null,
-                        border: Border.all(color: _TreeGreenTheme.border),
-                      ),
-                      child: !node.hasPhoto
-                          ? Icon(node.gender.icon,
-                              size: 26,
-                              color: _TreeGreenTheme.textMuted)
-                          : ClipOval(
-                              child: Image(
-                                image: node.photoProvider,
-                                fit: BoxFit.cover,
-                              ),
-                            ),
-                    ),
-                  ),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          node.name,
-                          style: const TextStyle(
-                            fontSize: 18,
-                            fontWeight: FontWeight.w700,
-                          ),
-                        ),
-                        const SizedBox(height: 4),
-                        Row(
-                          children: [
-                            Icon(node.gender.icon,
-                                size: 14,
-                                color: _TreeGreenTheme.textMuted),
-                            const SizedBox(width: 4),
-                            Text(
-                              node.gender.label,
-                              style: const TextStyle(
-                                fontSize: 12,
-                                color: _TreeGreenTheme.textMuted,
-                              ),
-                            ),
-                          ],
-                        ),
-                      ],
-                    ),
-                  ),
-                ],
-              ),
-
-              const SizedBox(height: 14),
-
-              /// 🔥 RELATIONSHIPS (CLICKABLE)
-              /// 🔥 RELATIONSHIPS (CLICKABLE)
-if (parentIds.isNotEmpty)
-  buildClickableRelation(label: 'Parents', ids: parentIds),
-
-if (siblingIds.isNotEmpty)
-  buildClickableRelation(label: 'Siblings', ids: siblingIds),
-
-if (childrenIds.isNotEmpty)
-  buildClickableRelation(label: 'Children', ids: childrenIds),
-
-if (parentIds.isNotEmpty ||
-    siblingIds.isNotEmpty ||
-    childrenIds.isNotEmpty)
-  const SizedBox(height: 6),
-
-              /// 🔹 DETAILS
-              if (infoLines.isEmpty)
-                const Text(
-                  'No additional details provided.',
-                  style: TextStyle(color: _TreeGreenTheme.textMuted),
-                )
-              else
-                ConstrainedBox(
-                  constraints: BoxConstraints(
-                    maxHeight: MediaQuery.of(context).size.height * 0.4,
-                  ),
-                  child: SingleChildScrollView(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        for (final t in infoLines)
-                          Padding(
-                            padding: const EdgeInsets.only(bottom: 10),
-                            child: Text(
-                              t,
-                              style: const TextStyle(fontSize: 14),
-                            ),
-                          ),
-                      ],
-                    ),
-                  ),
+    await showMenu<String>(
+      context: context,
+      position: position,
+      color: Colors.transparent,
+      elevation: 0,
+      constraints: const BoxConstraints(minWidth: 300, maxWidth: 340),
+      items: [
+        PopupMenuItem<String>(
+          value: '__details__',
+          enabled: false,
+          padding: EdgeInsets.zero,
+          child: Container(
+            width: 320,
+            padding: const EdgeInsets.all(16),
+            decoration: BoxDecoration(
+              color: _TreeGreenTheme.surface,
+              borderRadius: BorderRadius.circular(24),
+              border: Border.all(color: _TreeGreenTheme.border),
+              boxShadow: [
+                BoxShadow(
+                  color: _TreeGreenTheme.shadow,
+                  blurRadius: 18,
+                  offset: const Offset(0, 8),
                 ),
-            ],
+              ],
+            ),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                /// HEADER
+                Row(
+                  children: [
+                    GestureDetector(
+                      onTap: node.hasPhoto
+                          ? () => _viewPhotoFullScreen(node)
+                          : null,
+                      child: Container(
+                        width: 52,
+                        height: 52,
+                        decoration: BoxDecoration(
+                          shape: BoxShape.circle,
+                          color: !node.hasPhoto ? node.gender.tone : null,
+                          border: Border.all(color: _TreeGreenTheme.border),
+                        ),
+                        child: !node.hasPhoto
+                            ? Icon(node.gender.icon,
+                                size: 26, color: _TreeGreenTheme.textMuted)
+                            : ClipOval(
+                                child: Image(
+                                  image: node.photoProvider,
+                                  fit: BoxFit.cover,
+                                ),
+                              ),
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            node.name,
+                            style: const TextStyle(
+                              fontSize: 18,
+                              fontWeight: FontWeight.w700,
+                            ),
+                          ),
+                          const SizedBox(height: 4),
+                          Row(
+                            children: [
+                              Icon(node.gender.icon,
+                                  size: 14, color: _TreeGreenTheme.textMuted),
+                              const SizedBox(width: 4),
+                              Text(
+                                node.gender.label,
+                                style: const TextStyle(
+                                  fontSize: 12,
+                                  color: _TreeGreenTheme.textMuted,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+
+                const SizedBox(height: 14),
+
+                /// RELATIONSHIPS (CLICKABLE)
+                if (parentIds.isNotEmpty)
+                  buildClickableRelation(label: 'Parents', ids: parentIds),
+
+                if (siblingIds.isNotEmpty)
+                  buildClickableRelation(label: 'Siblings', ids: siblingIds),
+
+                if (childrenIds.isNotEmpty)
+                  buildClickableRelation(label: 'Children', ids: childrenIds),
+
+                if (parentIds.isNotEmpty ||
+                    siblingIds.isNotEmpty ||
+                    childrenIds.isNotEmpty)
+                  const SizedBox(height: 6),
+
+                /// DETAILS
+                if (infoLines.isEmpty)
+                  const Text(
+                    'No additional details provided.',
+                    style: TextStyle(color: _TreeGreenTheme.textMuted),
+                  )
+                else
+                  ConstrainedBox(
+                    constraints: BoxConstraints(
+                      maxHeight: MediaQuery.of(context).size.height * 0.4,
+                    ),
+                    child: SingleChildScrollView(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          for (final t in infoLines)
+                            Padding(
+                              padding: const EdgeInsets.only(bottom: 10),
+                              child: Text(
+                                t,
+                                style: const TextStyle(fontSize: 14),
+                              ),
+                            ),
+                        ],
+                      ),
+                    ),
+                  ),
+              ],
+            ),
           ),
         ),
-      ),
-    ],
-  );
-}
-
-
+      ],
+    );
+  }
 
   Future<void> _openNodeActions({
     required int nodeId,
@@ -1232,10 +1221,16 @@ if (parentIds.isNotEmpty ||
                       onTap: () => Navigator.pop(context, 'parent'),
                     ),
                     _PopupActionButton(
-                      icon: Icons.child_care,
-                      label: 'Add Child',
+                      icon: Icons.boy,
+                      label: 'Add Son',
                       color: _TreeGreenTheme.actionTeal,
-                      onTap: () => Navigator.pop(context, 'child'),
+                      onTap: () => Navigator.pop(context, 'son'),
+                    ),
+                    _PopupActionButton(
+                      icon: Icons.girl,
+                      label: 'Add Daughter',
+                      color: _TreeGreenTheme.actionTeal,
+                      onTap: () => Navigator.pop(context, 'daughter'),
                     ),
                     _PopupActionButton(
                       icon: Icons.delete,
@@ -1264,8 +1259,11 @@ if (parentIds.isNotEmpty ||
       case 'parent':
         await _addParentFlow(personId: nodeId);
         break;
-      case 'child':
-        await _addChildFlow(fromNodeId: nodeId);
+      case 'son':
+        await _addSonFlow(fromNodeId: nodeId);
+        break;
+      case 'daughter':
+        await _addDaughterFlow(fromNodeId: nodeId);
         break;
       case 'delete':
         final ok = await showDialog<bool>(
@@ -1324,61 +1322,56 @@ if (parentIds.isNotEmpty ||
     );
     if (!mounted || !r.saved) return;
 
-final name = (r.name ?? '').trim();
-if (name.isEmpty) return;
+    final name = (r.name ?? '').trim();
+    if (name.isEmpty) return;
 
-// 🔍 check duplicate
-final existingId = _findNodeByExactName(name);
-if (existingId != null) {
-  ScaffoldMessenger.of(context).showSnackBar(
-    SnackBar(content: Text('$name already exists. Redirecting...')),
-  );
-
-  _focusNode(existingId);
-  return;
-}
+    final existingId = _findNodeByExactName(name);
+    if (existingId != null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('$name already exists. Redirecting...')),
+      );
+      _focusNode(existingId);
+      return;
+    }
 
     final photoUrl = await _uploadPhotoIfNeeded(r.newPhotoBytes, 'spouse');
     if (!mounted) return;
 
     final added = store.addSpouse(
-  personId: personId,
-  name: name,
-  birthday: r.clearBirthday ? null : r.birthday,
-  photoUrl: photoUrl,
-  photoBytes: null,
-  address: r.details.address,
-  phone: r.details.phone,
-  company: r.details.company,
-  jobTitle: r.details.jobTitle,
-  fb: r.details.fb,
-  ig: r.details.ig,
-  xAccount: r.details.xAccount,
-  tiktok: r.details.tiktok,
-);
+      personId: personId,
+      name: name,
+      birthday: r.clearBirthday ? null : r.birthday,
+      photoUrl: photoUrl,
+      photoBytes: null,
+      address: r.details.address,
+      phone: r.details.phone,
+      company: r.details.company,
+      jobTitle: r.details.jobTitle,
+      fb: r.details.fb,
+      ig: r.details.ig,
+      xAccount: r.details.xAccount,
+      tiktok: r.details.tiktok,
+    );
 
-if (added == null) {
-  messenger.showSnackBar(
-    const SnackBar(content: Text('Could not add spouse.')),
-  );
-  return;
-}
+    if (added == null) {
+      messenger.showSnackBar(
+        const SnackBar(content: Text('Could not add spouse.')),
+      );
+      return;
+    }
 
-// ✅ place spouse beside the person
-WidgetsBinding.instance.addPostFrameCallback((_) {
-  final person = store.getNode(personId);
-
-  final isMale = person.gender == Gender.male;
-
-  _placeNear(
-    added.id,
-    personId,
-    Offset(
-      isMale ? cardSize.width + 40 : -(cardSize.width + 40),
-      0,
-    ),
-  );
-});
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final person = store.getNode(personId);
+      final isMale = person.gender == Gender.male;
+      _placeNear(
+        added.id,
+        personId,
+        Offset(
+          isMale ? cardSize.width + 40 : -(cardSize.width + 40),
+          0,
+        ),
+      );
+    });
   }
 
   Future<void> _addParentFlow({required int personId}) async {
@@ -1417,56 +1410,52 @@ WidgetsBinding.instance.addPostFrameCallback((_) {
     );
     if (!mounted || !r.saved) return;
 
-final name = (r.name ?? '').trim();
-if (name.isEmpty) return;
+    final name = (r.name ?? '').trim();
+    if (name.isEmpty) return;
 
-// 🔍 check duplicate
-final existingId = _findNodeByExactName(name);
-if (existingId != null) {
-  ScaffoldMessenger.of(context).showSnackBar(
-    SnackBar(content: Text('$name already exists. Redirecting...')),
-  );
-
-  _focusNode(existingId);
-  return;
-}
+    final existingId = _findNodeByExactName(name);
+    if (existingId != null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('$name already exists. Redirecting...')),
+      );
+      _focusNode(existingId);
+      return;
+    }
 
     final photoUrl = await _uploadPhotoIfNeeded(r.newPhotoBytes, 'parent');
     if (!mounted) return;
 
     final added = store.addParent(
-  personId: personId,
-  parentGender: r.gender,
-  name: name,
-  birthday: r.clearBirthday ? null : r.birthday,
-  photoUrl: photoUrl,
-  photoBytes: null,
-  address: r.details.address,
-  phone: r.details.phone,
-  company: r.details.company,
-  jobTitle: r.details.jobTitle,
-  fb: r.details.fb,
-  ig: r.details.ig,
-  xAccount: r.details.xAccount,
-  tiktok: r.details.tiktok,
-);
+      personId: personId,
+      parentGender: r.gender,
+      name: name,
+      birthday: r.clearBirthday ? null : r.birthday,
+      photoUrl: photoUrl,
+      photoBytes: null,
+      address: r.details.address,
+      phone: r.details.phone,
+      company: r.details.company,
+      jobTitle: r.details.jobTitle,
+      fb: r.details.fb,
+      ig: r.details.ig,
+      xAccount: r.details.xAccount,
+      tiktok: r.details.tiktok,
+    );
 
-if (added == null) {
-  messenger.showSnackBar(
-    const SnackBar(content: Text('Could not add parent (blocked).')),
-  );
-  return;
-}
+    if (added == null) {
+      messenger.showSnackBar(
+        const SnackBar(content: Text('Could not add parent (blocked).')),
+      );
+      return;
+    }
 
-// ✅ move parent near the child
-WidgetsBinding.instance.addPostFrameCallback((_) {
-  _placeNear(
-    added.id,
-    personId,
-    Offset(0, -(cardSize.height + 40)), // above the child
-  );
-});
-    
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _placeNear(
+        added.id,
+        personId,
+        Offset(0, -(cardSize.height + 40)),
+      );
+    });
   }
 
   Future<void> _addChildFlow({required int fromNodeId}) async {
@@ -1481,48 +1470,119 @@ WidgetsBinding.instance.addPostFrameCallback((_) {
     );
     if (!mounted || !r.saved) return;
 
-final name = (r.name ?? '').trim();
-if (name.isEmpty) return;
+    final name = (r.name ?? '').trim();
+    if (name.isEmpty) return;
 
-// 🔍 check duplicate
-final existingId = _findNodeByExactName(name);
-if (existingId != null) {
-  ScaffoldMessenger.of(context).showSnackBar(
-    SnackBar(content: Text('$name already exists. Redirecting...')),
-  );
-
-  _focusNode(existingId);
-  return;
-}
+    final existingId = _findNodeByExactName(name);
+    if (existingId != null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('$name already exists. Redirecting...')),
+      );
+      _focusNode(existingId);
+      return;
+    }
 
     final photoUrl = await _uploadPhotoIfNeeded(r.newPhotoBytes, 'child');
     if (!mounted) return;
 
     final child = store.addChild(
-  fromNodeId: fromNodeId,
-  name: name,
-  childGender: r.gender,
-  birthday: r.clearBirthday ? null : r.birthday,
-  photoUrl: photoUrl,
-  photoBytes: null,
-  address: r.details.address,
-  phone: r.details.phone,
-  company: r.details.company,
-  jobTitle: r.details.jobTitle,
-  fb: r.details.fb,
-  ig: r.details.ig,
-  xAccount: r.details.xAccount,
-  tiktok: r.details.tiktok,
-);
+      fromNodeId: fromNodeId,
+      name: name,
+      childGender: r.gender,
+      birthday: r.clearBirthday ? null : r.birthday,
+      photoUrl: photoUrl,
+      photoBytes: null,
+      address: r.details.address,
+      phone: r.details.phone,
+      company: r.details.company,
+      jobTitle: r.details.jobTitle,
+      fb: r.details.fb,
+      ig: r.details.ig,
+      xAccount: r.details.xAccount,
+      tiktok: r.details.tiktok,
+    );
 
-// 📍 place directly below parent
-WidgetsBinding.instance.addPostFrameCallback((_) {
-  _placeNear(
-    child.id,
-    fromNodeId,
-    Offset(0, cardSize.height + 40),
-  );
-});
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _placeNear(
+        child.id,
+        fromNodeId,
+        Offset(0, cardSize.height + 40),
+      );
+    });
+  }
+
+  Future<void> _addSonFlow({required int fromNodeId}) async {
+    await _addChildWithGender(
+      fromNodeId: fromNodeId,
+      gender: Gender.male,
+      title: 'Add Son',
+    );
+  }
+
+  Future<void> _addDaughterFlow({required int fromNodeId}) async {
+    await _addChildWithGender(
+      fromNodeId: fromNodeId,
+      gender: Gender.female,
+      title: 'Add Daughter',
+    );
+  }
+
+  Future<void> _addChildWithGender({
+    required int fromNodeId,
+    required Gender gender,
+    required String title,
+  }) async {
+    final r = await _openMemberFormDrawer(
+      title: title,
+      showNameField: true,
+      initialName: gender == Gender.male ? 'New Son' : 'New Daughter',
+      initialGender: gender,
+      allowedGenders: [gender],
+      allowRemovePhoto: false,
+      allowClearBirthday: true,
+    );
+
+    if (!mounted || !r.saved) return;
+
+    final name = (r.name ?? '').trim();
+    if (name.isEmpty) return;
+
+    final existingId = _findNodeByExactName(name);
+    if (existingId != null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('$name already exists. Redirecting...')),
+      );
+      _focusNode(existingId);
+      return;
+    }
+
+    final photoUrl = await _uploadPhotoIfNeeded(r.newPhotoBytes, 'child');
+    if (!mounted) return;
+
+    final child = store.addChild(
+      fromNodeId: fromNodeId,
+      name: name,
+      childGender: gender,
+      birthday: r.clearBirthday ? null : r.birthday,
+      photoUrl: photoUrl,
+      photoBytes: null,
+      address: r.details.address,
+      phone: r.details.phone,
+      company: r.details.company,
+      jobTitle: r.details.jobTitle,
+      fb: r.details.fb,
+      ig: r.details.ig,
+      xAccount: r.details.xAccount,
+      tiktok: r.details.tiktok,
+    );
+
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _placeNear(
+        child.id,
+        fromNodeId,
+        Offset(0, cardSize.height + 40),
+      );
+    });
   }
 
   @override
@@ -1566,39 +1626,39 @@ WidgetsBinding.instance.addPostFrameCallback((_) {
             elevation: 0,
             surfaceTintColor: Colors.transparent,
             title: Row(
-  children: [
-    const Expanded(
-      child: Text('Camello Family Tree'),
-    ),
-    SizedBox(
-      width: 250,
-      child: TextField(
-        controller: searchController,
-        decoration: InputDecoration(
-          hintText: 'Search member...',
-          prefixIcon: const Icon(Icons.search),
-          contentPadding: const EdgeInsets.symmetric(horizontal: 10),
-          border: OutlineInputBorder(
-            borderRadius: BorderRadius.circular(10),
-          ),
-          isDense: true,
-        ),
-        onSubmitted: _handleSearch,
-      ),
-    ),
-    IconButton(
-  tooltip: _previewMode ? 'Exit Preview Mode' : 'Preview Mode',
-  icon: Icon(
-    _previewMode ? Icons.visibility_off : Icons.visibility,
-  ),
-  onPressed: () {
-    setState(() {
-      _previewMode = !_previewMode;
-    });
-  },
-),
-  ],
-),
+              children: [
+                const Expanded(
+                  child: Text('Camello Family Tree'),
+                ),
+                SizedBox(
+                  width: 250,
+                  child: TextField(
+                    controller: searchController,
+                    decoration: InputDecoration(
+                      hintText: 'Search member...',
+                      prefixIcon: const Icon(Icons.search),
+                      contentPadding: const EdgeInsets.symmetric(horizontal: 10),
+                      border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                      isDense: true,
+                    ),
+                    onSubmitted: _handleSearch,
+                  ),
+                ),
+                IconButton(
+                  tooltip: _previewMode ? 'Exit Preview Mode' : 'Preview Mode',
+                  icon: Icon(
+                    _previewMode ? Icons.visibility_off : Icons.visibility,
+                  ),
+                  onPressed: () {
+                    setState(() {
+                      _previewMode = !_previewMode;
+                    });
+                  },
+                ),
+              ],
+            ),
             actions: [
               IconButton(
                 tooltip: 'Log out',
@@ -1609,6 +1669,7 @@ WidgetsBinding.instance.addPostFrameCallback((_) {
           ),
           body: Stack(
             children: [
+              // ===== SHIFTING AREA =====
               AnimatedPositioned(
                 duration: const Duration(milliseconds: 320),
                 curve: Curves.easeOutQuart,
@@ -1616,162 +1677,261 @@ WidgetsBinding.instance.addPostFrameCallback((_) {
                 top: 0,
                 right: 0,
                 bottom: 0,
-                child: GestureDetector(
-                  behavior: HitTestBehavior.translucent,
-                  onTapDown: (_) {
-                    if (_isLinking) return;
-                    if (_ctrlPressed) return;
-                    _clearCtrlSelection();
-                  },
-                  child: InteractiveViewer(
-                    transformationController: _tc,
-                    constrained: false,
-                    boundaryMargin: const EdgeInsets.all(1000000),
-                    clipBehavior: Clip.none,
-                    minScale: _minZoom,
-                    maxScale: _maxZoom,
-                    child: SizedBox(
-                      width: canvasSize.width,
-                      height: canvasSize.height,
-                      child: Stack(
+                child: Stack(
+                  key: _viewerContainerKey,
+                  children: [
+                    // --- Tree & interactions ---
+                    GestureDetector(
+                      behavior: HitTestBehavior.translucent,
+                      onTapDown: (_) {
+                        if (_isLinking) return;
+                        if (_ctrlPressed) return;
+                        _clearCtrlSelection();
+                      },
+                      child: InteractiveViewer(
+                        transformationController: _tc,
+                        constrained: false,
+                        boundaryMargin: const EdgeInsets.all(1000000),
                         clipBehavior: Clip.none,
-                        children: [
-                          if (!isEmpty)
-                            CustomPaint(
-                              size: canvasSize,
-                              painter: ConnectorPainter(
-                                store: store,
-                                positions: layout,
-                                cardSize: cardSize,
+                        minScale: _minZoom,
+                        maxScale: _maxZoom,
+                        child: SizedBox(
+                          width: canvasSize.width,
+                          height: canvasSize.height,
+                          child: Stack(
+                            clipBehavior: Clip.none,
+                            children: [
+                              if (!isEmpty)
+                                CustomPaint(
+                                  size: canvasSize,
+                                  painter: ConnectorPainter(
+                                    store: store,
+                                    positions: layout,
+                                    cardSize: cardSize,
+                                  ),
+                                ),
+                              for (final entry in layout.entries)
+                                AnimatedNode(
+                                  node: store.getNode(entry.key),
+                                  topLeft: entry.value,
+                                  size: cardSize,
+                                  isSelected: _ctrlSelectedIds.contains(entry.key),
+                                  isHovered: _ctrlSelectedIds.contains(entry.key) ||
+                                      entry.key == _hoveredNodeId ||
+                                      (_isLinking && _linkFromNodeId == entry.key),
+                                  isDragging: _draggingNodeId == entry.key,
+                                  dragEnabled: !_isLinking && !_previewMode,
+                                  showPortsEnabled: !_previewMode && store.canEditNodeId(entry.key),
+                                  onHoverChanged: (hovering) {
+                                    if (!mounted) return;
+                                    setState(() {
+                                      if (hovering) {
+                                        _hoveredNodeId = entry.key;
+                                      } else if (_hoveredNodeId == entry.key) {
+                                        _hoveredNodeId = null;
+                                      }
+                                    });
+                                  },
+                                  onTapSelect: (id, globalPosition) {
+                                    if (_previewMode) {
+                                      _showDetailsPopup(
+                                        nodeId: id,
+                                        globalTapPosition: globalPosition,
+                                      );
+                                      return;
+                                    }
+
+                                    if (_isLinking) return;
+
+                                    if (_ctrlPressed) {
+                                      _toggleCtrlSelect(id);
+                                      return;
+                                    }
+
+                                    if (_ctrlSelectedIds.isNotEmpty) {
+                                      ScaffoldMessenger.of(context).showSnackBar(
+                                        const SnackBar(
+                                          content: Text('Selection active. Ctrl+Click tiles to unselect.'),
+                                        ),
+                                      );
+                                      return;
+                                    }
+
+                                    _openNodeActions(
+                                      nodeId: id,
+                                      globalTapPosition: globalPosition,
+                                    );
+                                  },
+                                  onDragStart: () {
+                                    if (_isLinking) return;
+                                    setState(() => _draggingNodeId = entry.key);
+                                    if (_ctrlPressed && !_ctrlSelectedIds.contains(entry.key)) {
+                                      _toggleCtrlSelect(entry.key);
+                                    }
+                                  },
+                                  onDragEnd: () {
+                                    if (!mounted) return;
+                                    setState(() => _draggingNodeId = null);
+                                  },
+                                  onDragDelta: (delta) {
+                                    if (_isLinking) return;
+                                    final draggedId = entry.key;
+                                    final ids = (_ctrlSelectedIds.isNotEmpty &&
+                                            _ctrlSelectedIds.contains(draggedId))
+                                        ? _ctrlSelectedIds
+                                        : <int>{draggedId};
+                                    if (ids.length == 1) {
+                                      store.addManualOffset(draggedId, delta);
+                                    } else {
+                                      store.addManualOffsetBulk(ids, delta);
+                                    }
+                                  },
+                                  onStartPortDrag: (port, globalStart) {
+                                    final topLeft = layout[entry.key]!;
+                                    final startScene = switch (port) {
+                                      LinkPort.parentTop =>
+                                        Offset(topLeft.dx + cardSize.width / 2, topLeft.dy),
+                                      LinkPort.childBottom => Offset(
+                                          topLeft.dx + cardSize.width / 2,
+                                          topLeft.dy + cardSize.height,
+                                        ),
+                                      LinkPort.spouseLeft =>
+                                        Offset(topLeft.dx, topLeft.dy + cardSize.height / 2),
+                                      LinkPort.spouseRight => Offset(
+                                          topLeft.dx + cardSize.width,
+                                          topLeft.dy + cardSize.height / 2,
+                                        ),
+                                    };
+                                    _startLink(
+                                      fromNodeId: entry.key,
+                                      port: port,
+                                      startScene: startScene,
+                                      startViewport: _globalToViewport(globalStart),
+                                    );
+                                  },
+                                  onUpdatePortDrag: (g) => _updateLink(_globalToViewport(g)),
+                                  onEndPortDrag: (g) => _endLink(_globalToViewport(g)),
+                                  onTapPort: _handlePortTap,
+                                ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ),
+
+                    // --- Link dragging preview ---
+                    if (_isLinking)
+                      Positioned.fill(
+                        child: IgnorePointer(
+                          child: CustomPaint(
+                            painter: LinkPreviewPainter(
+                              start: _sceneToViewport(_linkStartScene),
+                              end: _hoverTargetId != null
+                                  ? _snappedEndViewport
+                                  : _linkCurrentViewport,
+                            ),
+                          ),
+                        ),
+                      ),
+
+                    // --- Loading / Empty state ---
+                    if (_isLoading)
+                      const Center(child: CircularProgressIndicator())
+                    else if (isEmpty)
+                      Center(
+                        child: Padding(
+                          padding: const EdgeInsets.all(18),
+                          child: Material(
+                            elevation: 2,
+                            borderRadius: BorderRadius.circular(18),
+                            color: _TreeGreenTheme.surface,
+                            child: Padding(
+                              padding: const EdgeInsets.fromLTRB(18, 16, 18, 16),
+                              child: Column(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  const Icon(Icons.account_tree, size: 42),
+                                  const SizedBox(height: 10),
+                                  const Text(
+                                    'Start your family tree',
+                                    style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700),
+                                  ),
+                                  const SizedBox(height: 6),
+                                  const Text(
+                                    'Add your first member to begin.',
+                                    style: TextStyle(color: _TreeGreenTheme.textMuted),
+                                  ),
+                                  const SizedBox(height: 14),
+                                  FilledButton.icon(
+                                    onPressed: _addFirstMemberFlow,
+                                    icon: const Icon(Icons.person_add),
+                                    label: const Text('Add First Member'),
+                                  ),
+                                ],
                               ),
                             ),
-                          for (final entry in layout.entries)
-                            AnimatedNode(
-                              
-                              node: store.getNode(entry.key),
-                              topLeft: entry.value,
-                              size: cardSize,
-                              isSelected: _ctrlSelectedIds.contains(entry.key),
-                              isHovered: _ctrlSelectedIds.contains(entry.key) ||
-                                  entry.key == _hoveredNodeId ||
-                                  (_isLinking && _linkFromNodeId == entry.key),
-                              isDragging: _draggingNodeId == entry.key,
-                              dragEnabled: !_isLinking && !_previewMode,
-                              showPortsEnabled: !_previewMode && store.canEditNodeId(entry.key),
-                              onHoverChanged: (hovering) {
-                                if (!mounted) return;
-                                setState(() {
-                                  if (hovering) {
-                                    _hoveredNodeId = entry.key;
-                                  } else if (_hoveredNodeId == entry.key) {
-                                    _hoveredNodeId = null;
-                                  }
-                                });
-                              },
-                              onTapSelect: (id, globalPosition) {
-  if (_previewMode) {
-    _showDetailsPopup(
-      nodeId: id,
-      globalTapPosition: globalPosition,
-    );
-    return;
-  }
-
-  if (_isLinking) return;
-
-  if (_ctrlPressed) {
-    _toggleCtrlSelect(id);
-    return;
-  }
-
-  if (_ctrlSelectedIds.isNotEmpty) {
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(
-        content: Text('Selection active. Ctrl+Click tiles to unselect.'),
-      ),
-    );
-    return;
-  }
-
-  _openNodeActions(
-    nodeId: id,
-    globalTapPosition: globalPosition,
-  );
-},
-                              onDragStart: () {
-                                if (_isLinking) return;
-
-                                setState(() => _draggingNodeId = entry.key);
-
-                                if (_ctrlPressed && !_ctrlSelectedIds.contains(entry.key)) {
-                                  _toggleCtrlSelect(entry.key);
-                                }
-                              },
-                              onDragEnd: () {
-                                if (!mounted) return;
-                                setState(() => _draggingNodeId = null);
-                              },
-                              onDragDelta: (delta) {
-                                if (_isLinking) return;
-
-                                final draggedId = entry.key;
-                                final ids = (_ctrlSelectedIds.isNotEmpty &&
-                                        _ctrlSelectedIds.contains(draggedId))
-                                    ? _ctrlSelectedIds
-                                    : <int>{draggedId};
-
-                                if (ids.length == 1) {
-                                  store.addManualOffset(draggedId, delta);
-                                } else {
-                                  store.addManualOffsetBulk(ids, delta);
-                                }
-                              },
-                              onStartPortDrag: (port, globalStart) {
-                                final topLeft = layout[entry.key]!;
-                                final startScene = switch (port) {
-                                  LinkPort.parentTop =>
-                                    Offset(topLeft.dx + cardSize.width / 2, topLeft.dy),
-                                  LinkPort.childBottom => Offset(
-                                      topLeft.dx + cardSize.width / 2,
-                                      topLeft.dy + cardSize.height,
-                                    ),
-                                  LinkPort.spouseLeft =>
-                                    Offset(topLeft.dx, topLeft.dy + cardSize.height / 2),
-                                  LinkPort.spouseRight => Offset(
-                                      topLeft.dx + cardSize.width,
-                                      topLeft.dy + cardSize.height / 2,
-                                    ),
-                                };
-
-                                _startLink(
-                                  fromNodeId: entry.key,
-                                  port: port,
-                                  startScene: startScene,
-                                  startViewport: _globalToViewport(globalStart),
-                                  
-                                );
-                              },
-                              onUpdatePortDrag: (g) => _updateLink(_globalToViewport(g)),
-                              onEndPortDrag: (g) => _endLink(_globalToViewport(g)),
-                              onTapPort: _handlePortTap,
-                            ),
-                        ],
+                          ),
+                        ),
                       ),
-                    ),
-                  ),
+
+                    // --- Zoom slider & add standalone button ---
+                    if (!isEmpty)
+                      Positioned(
+                        right: 16,
+                        bottom: 16,
+                        child: Material(
+                          elevation: 2,
+                          color: _TreeGreenTheme.surface,
+                          borderRadius: BorderRadius.circular(16),
+                          child: Padding(
+                            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                            child: SizedBox(
+                              width: 290,
+                              child: Row(
+                                children: [
+                                  IconButton(
+                                    tooltip: 'Zoom out',
+                                    icon: const Icon(Icons.remove, size: 18),
+                                    onPressed: () {
+                                      final next = (_zoomValue / 1.15).clamp(_minZoom, _maxZoom);
+                                      _setZoom(next);
+                                    },
+                                  ),
+                                  Expanded(
+                                    child: Slider(
+                                      value: _zoomValue.clamp(_minZoom, _maxZoom),
+                                      min: _minZoom,
+                                      max: _maxZoom,
+                                      onChanged: (v) => _setZoom(v),
+                                    ),
+                                  ),
+                                  IconButton(
+                                    tooltip: 'Zoom in',
+                                    icon: const Icon(Icons.add, size: 18),
+                                    onPressed: () {
+                                      final next = (_zoomValue * 1.15).clamp(_minZoom, _maxZoom);
+                                      _setZoom(next);
+                                    },
+                                  ),
+                                  const SizedBox(width: 6),
+                                  Container(width: 1, height: 22, color: _TreeGreenTheme.divider),
+                                  const SizedBox(width: 6),
+                                  IconButton(
+                                    tooltip: 'Add standalone member',
+                                    icon: const Icon(Icons.person_add_alt_1, size: 18),
+                                    onPressed: _addStandaloneMemberFlow,
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
+                  ],
                 ),
               ),
-              if (_isLinking)
-                Positioned.fill(
-                  child: IgnorePointer(
-                    child: CustomPaint(
-                      painter: LinkPreviewPainter(
-                        start: _sceneToViewport(_linkStartScene),
-                        end: _hoverTargetId != null ? _snappedEndViewport : _linkCurrentViewport,
-                      ),
-                    ),
-                  ),
-                ),
+
+              // ===== SIDEBAR (does not shift) =====
               Positioned(
                 left: 0,
                 top: 0,
@@ -1817,98 +1977,6 @@ WidgetsBinding.instance.addPostFrameCallback((_) {
                   ),
                 ),
               ),
-              if (_isLoading)
-  const Center(
-    child: CircularProgressIndicator(),
-  )
-else if (isEmpty)
-  Center(
-    child: Padding(
-      padding: const EdgeInsets.all(18),
-      child: Material(
-        elevation: 2,
-        borderRadius: BorderRadius.circular(18),
-        color: _TreeGreenTheme.surface,
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(18, 16, 18, 16),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              const Icon(Icons.account_tree, size: 42),
-              const SizedBox(height: 10),
-              const Text(
-                'Start your family tree',
-                style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700),
-              ),
-              const SizedBox(height: 6),
-              Text(
-                'Add your first member to begin.',
-                style: const TextStyle(color: _TreeGreenTheme.textMuted),
-              ),
-              const SizedBox(height: 14),
-              FilledButton.icon(
-                onPressed: _addFirstMemberFlow,
-                icon: const Icon(Icons.person_add),
-                label: const Text('Add First Member'),
-              ),
-            ],
-          ),
-        ),
-      ),
-    ),
-  ),
-              if (!isEmpty)
-                Positioned(
-                  right: 16,
-                  bottom: 16,
-                  child: Material(
-                    elevation: 2,
-                    color: _TreeGreenTheme.surface,
-                    borderRadius: BorderRadius.circular(16),
-                    child: Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-                      child: SizedBox(
-                        width: 290,
-                        child: Row(
-                          children: [
-                            IconButton(
-                              tooltip: 'Zoom out',
-                              icon: const Icon(Icons.remove, size: 18),
-                              onPressed: () {
-                                final next = (_zoomValue / 1.15).clamp(_minZoom, _maxZoom);
-                                _setZoom(next);
-                              },
-                            ),
-                            Expanded(
-                              child: Slider(
-                                value: _zoomValue.clamp(_minZoom, _maxZoom),
-                                min: _minZoom,
-                                max: _maxZoom,
-                                onChanged: (v) => _setZoom(v),
-                              ),
-                            ),
-                            IconButton(
-                              tooltip: 'Zoom in',
-                              icon: const Icon(Icons.add, size: 18),
-                              onPressed: () {
-                                final next = (_zoomValue * 1.15).clamp(_minZoom, _maxZoom);
-                                _setZoom(next);
-                              },
-                            ),
-                            const SizedBox(width: 6),
-                            Container(width: 1, height: 22, color: _TreeGreenTheme.divider),
-                            const SizedBox(width: 6),
-                            IconButton(
-                              tooltip: 'Add standalone member',
-                              icon: const Icon(Icons.person_add_alt_1, size: 18),
-                              onPressed: _addStandaloneMemberFlow,
-                            ),
-                          ],
-                        ),
-                      ),
-                    ),
-                  ),
-                ),
             ],
           ),
         );
