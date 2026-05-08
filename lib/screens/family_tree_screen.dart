@@ -138,7 +138,7 @@ class _FamilyTreeScreenState extends State<FamilyTreeScreen> {
   static const double hGap = 40;
   static const double vGap = 70;
   static const double virtualSize = 100000;
-  static const double _drawerWidth = 420;
+  static const double _maxDrawerWidth = 420;
 
   final TransformationController _tc = TransformationController();
 
@@ -170,8 +170,11 @@ class _FamilyTreeScreenState extends State<FamilyTreeScreen> {
   _MemberFormDrawerRequest? _drawerRequest;
   Completer<MemberFormResult>? _drawerCompleter;
 
-  // 🔑 Key to correctly convert coordinates when the tree is shifted
+  // Key for coordinate conversion when the tree area is shifted
   final GlobalKey _viewerContainerKey = GlobalKey();
+
+  // Search controller kept alive for the entire lifetime of the state
+  final TextEditingController _searchController = TextEditingController();
 
   bool get _isDrawerOpen => _drawerRequest != null;
 
@@ -221,6 +224,7 @@ class _FamilyTreeScreenState extends State<FamilyTreeScreen> {
     }
 
     _authSub?.cancel();
+    _searchController.dispose();
     store.dispose();
     _tc.dispose();
     super.dispose();
@@ -958,7 +962,6 @@ class _FamilyTreeScreenState extends State<FamilyTreeScreen> {
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                /// HEADER
                 Row(
                   children: [
                     GestureDetector(
@@ -1019,7 +1022,6 @@ class _FamilyTreeScreenState extends State<FamilyTreeScreen> {
 
                 const SizedBox(height: 14),
 
-                /// RELATIONSHIPS (CLICKABLE)
                 if (parentIds.isNotEmpty)
                   buildClickableRelation(label: 'Parents', ids: parentIds),
 
@@ -1034,7 +1036,6 @@ class _FamilyTreeScreenState extends State<FamilyTreeScreen> {
                     childrenIds.isNotEmpty)
                   const SizedBox(height: 6),
 
-                /// DETAILS
                 if (infoLines.isEmpty)
                   const Text(
                     'No additional details provided.',
@@ -1587,400 +1588,425 @@ class _FamilyTreeScreenState extends State<FamilyTreeScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final TextEditingController searchController = TextEditingController();
-    return AnimatedBuilder(
-      animation: store,
-      builder: (context, _) {
-        final layoutRaw = FamilyTreeLayout(
-          store: store,
-          cardSize: cardSize,
-          hGap: hGap,
-          vGap: vGap,
-        ).compute();
+    final layoutRaw = FamilyTreeLayout(
+      store: store,
+      cardSize: cardSize,
+      hGap: hGap,
+      vGap: vGap,
+    ).compute();
 
-        final origin = const Offset(virtualSize / 2, virtualSize / 2);
-        final layout = <int, Offset>{
-          for (final e in layoutRaw.entries) e.key: e.value + origin,
-        };
+    final origin = const Offset(virtualSize / 2, virtualSize / 2);
+    final layout = <int, Offset>{
+      for (final e in layoutRaw.entries) e.key: e.value + origin,
+    };
 
-        _lastLayoutScene = layout;
+    _lastLayoutScene = layout;
 
-        final bounds = _computeBounds(layout);
+    final bounds = _computeBounds(layout);
 
-        if (!_didInitialCenter && layout.isNotEmpty) {
-          _didInitialCenter = true;
-          WidgetsBinding.instance.addPostFrameCallback((_) {
-            if (!mounted) return;
-            _fitToScreen(bounds);
-          });
-        }
+    if (!_didInitialCenter && layout.isNotEmpty) {
+      _didInitialCenter = true;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        _fitToScreen(bounds);
+      });
+    }
 
-        final canvasSize = const Size(virtualSize, virtualSize);
-        final isEmpty = store.nodes.isEmpty;
+    final canvasSize = const Size(virtualSize, virtualSize);
+    final isEmpty = store.nodes.isEmpty;
 
-        return Scaffold(
-          backgroundColor: _TreeGreenTheme.scaffold,
-          appBar: AppBar(
-            backgroundColor: _TreeGreenTheme.appBar,
-            foregroundColor: _TreeGreenTheme.primaryDark,
-            elevation: 0,
-            surfaceTintColor: Colors.transparent,
-            title: Row(
+    // --- Responsive drawer width ---
+    final screenWidth = MediaQuery.of(context).size.width;
+    final drawerWidth = min(_maxDrawerWidth, screenWidth);
+
+    return Scaffold(
+      backgroundColor: _TreeGreenTheme.scaffold,
+      // No AppBar – search is now a floating widget
+      body: Stack(
+        children: [
+          // ===== SHIFTING AREA =====
+          AnimatedPositioned(
+            duration: const Duration(milliseconds: 320),
+            curve: Curves.easeOutQuart,
+            left: _isDrawerOpen ? drawerWidth : 0,
+            top: 0,
+            right: 0,
+            bottom: 0,
+            child: Stack(
+              key: _viewerContainerKey,
               children: [
-                const Expanded(
-                  child: Text('Camello Family Tree'),
-                ),
-                SizedBox(
-                  width: 250,
-                  child: TextField(
-                    controller: searchController,
-                    decoration: InputDecoration(
-                      hintText: 'Search member...',
-                      prefixIcon: const Icon(Icons.search),
-                      contentPadding: const EdgeInsets.symmetric(horizontal: 10),
-                      border: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(10),
-                      ),
-                      isDense: true,
-                    ),
-                    onSubmitted: _handleSearch,
-                  ),
-                ),
-                IconButton(
-                  tooltip: _previewMode ? 'Exit Preview Mode' : 'Preview Mode',
-                  icon: Icon(
-                    _previewMode ? Icons.visibility_off : Icons.visibility,
-                  ),
-                  onPressed: () {
-                    setState(() {
-                      _previewMode = !_previewMode;
-                    });
+                // Tree and interactions
+                GestureDetector(
+                  behavior: HitTestBehavior.translucent,
+                  onTapDown: (_) {
+                    if (_isLinking) return;
+                    if (_ctrlPressed) return;
+                    _clearCtrlSelection();
                   },
-                ),
-              ],
-            ),
-            actions: [
-              IconButton(
-                tooltip: 'Log out',
-                onPressed: _logout,
-                icon: const Icon(Icons.logout),
-              ),
-            ],
-          ),
-          body: Stack(
-            children: [
-              // ===== SHIFTING AREA =====
-              AnimatedPositioned(
-                duration: const Duration(milliseconds: 320),
-                curve: Curves.easeOutQuart,
-                left: _isDrawerOpen ? _drawerWidth : 0,
-                top: 0,
-                right: 0,
-                bottom: 0,
-                child: Stack(
-                  key: _viewerContainerKey,
-                  children: [
-                    // --- Tree & interactions ---
-                    GestureDetector(
-                      behavior: HitTestBehavior.translucent,
-                      onTapDown: (_) {
-                        if (_isLinking) return;
-                        if (_ctrlPressed) return;
-                        _clearCtrlSelection();
-                      },
-                      child: InteractiveViewer(
-                        transformationController: _tc,
-                        constrained: false,
-                        boundaryMargin: const EdgeInsets.all(1000000),
+                  child: InteractiveViewer(
+                    transformationController: _tc,
+                    constrained: false,
+                    boundaryMargin: const EdgeInsets.all(1000000),
+                    clipBehavior: Clip.none,
+                    minScale: _minZoom,
+                    maxScale: _maxZoom,
+                    child: SizedBox(
+                      width: canvasSize.width,
+                      height: canvasSize.height,
+                      child: Stack(
                         clipBehavior: Clip.none,
-                        minScale: _minZoom,
-                        maxScale: _maxZoom,
-                        child: SizedBox(
-                          width: canvasSize.width,
-                          height: canvasSize.height,
-                          child: Stack(
-                            clipBehavior: Clip.none,
+                        children: [
+                          if (!isEmpty)
+                            CustomPaint(
+                              size: canvasSize,
+                              painter: ConnectorPainter(
+                                store: store,
+                                positions: layout,
+                                cardSize: cardSize,
+                              ),
+                            ),
+                          for (final entry in layout.entries)
+                            AnimatedNode(
+                              node: store.getNode(entry.key),
+                              topLeft: entry.value,
+                              size: cardSize,
+                              isSelected: _ctrlSelectedIds.contains(entry.key),
+                              isHovered: _ctrlSelectedIds.contains(entry.key) ||
+                                  entry.key == _hoveredNodeId ||
+                                  (_isLinking && _linkFromNodeId == entry.key),
+                              isDragging: _draggingNodeId == entry.key,
+                              dragEnabled: !_isLinking && !_previewMode,
+                              showPortsEnabled: !_previewMode && store.canEditNodeId(entry.key),
+                              onHoverChanged: (hovering) {
+                                if (!mounted) return;
+                                setState(() {
+                                  if (hovering) {
+                                    _hoveredNodeId = entry.key;
+                                  } else if (_hoveredNodeId == entry.key) {
+                                    _hoveredNodeId = null;
+                                  }
+                                });
+                              },
+                              onTapSelect: (id, globalPosition) {
+                                if (_previewMode) {
+                                  _showDetailsPopup(
+                                    nodeId: id,
+                                    globalTapPosition: globalPosition,
+                                  );
+                                  return;
+                                }
+
+                                if (_isLinking) return;
+
+                                if (_ctrlPressed) {
+                                  _toggleCtrlSelect(id);
+                                  return;
+                                }
+
+                                if (_ctrlSelectedIds.isNotEmpty) {
+                                  ScaffoldMessenger.of(context).showSnackBar(
+                                    const SnackBar(
+                                      content: Text('Selection active. Ctrl+Click tiles to unselect.'),
+                                    ),
+                                  );
+                                  return;
+                                }
+
+                                _openNodeActions(
+                                  nodeId: id,
+                                  globalTapPosition: globalPosition,
+                                );
+                              },
+                              onDragStart: () {
+                                if (_isLinking) return;
+                                setState(() => _draggingNodeId = entry.key);
+                                if (_ctrlPressed && !_ctrlSelectedIds.contains(entry.key)) {
+                                  _toggleCtrlSelect(entry.key);
+                                }
+                              },
+                              onDragEnd: () {
+                                if (!mounted) return;
+                                setState(() => _draggingNodeId = null);
+                              },
+                              onDragDelta: (delta) {
+                                if (_isLinking) return;
+                                final draggedId = entry.key;
+                                final ids = (_ctrlSelectedIds.isNotEmpty &&
+                                        _ctrlSelectedIds.contains(draggedId))
+                                    ? _ctrlSelectedIds
+                                    : <int>{draggedId};
+                                if (ids.length == 1) {
+                                  store.addManualOffset(draggedId, delta);
+                                } else {
+                                  store.addManualOffsetBulk(ids, delta);
+                                }
+                              },
+                              onStartPortDrag: (port, globalStart) {
+                                final topLeft = layout[entry.key]!;
+                                final startScene = switch (port) {
+                                  LinkPort.parentTop =>
+                                    Offset(topLeft.dx + cardSize.width / 2, topLeft.dy),
+                                  LinkPort.childBottom => Offset(
+                                      topLeft.dx + cardSize.width / 2,
+                                      topLeft.dy + cardSize.height,
+                                    ),
+                                  LinkPort.spouseLeft =>
+                                    Offset(topLeft.dx, topLeft.dy + cardSize.height / 2),
+                                  LinkPort.spouseRight => Offset(
+                                      topLeft.dx + cardSize.width,
+                                      topLeft.dy + cardSize.height / 2,
+                                    ),
+                                };
+                                _startLink(
+                                  fromNodeId: entry.key,
+                                  port: port,
+                                  startScene: startScene,
+                                  startViewport: _globalToViewport(globalStart),
+                                );
+                              },
+                              onUpdatePortDrag: (g) => _updateLink(_globalToViewport(g)),
+                              onEndPortDrag: (g) => _endLink(_globalToViewport(g)),
+                              onTapPort: _handlePortTap,
+                            ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+
+                // Link dragging preview
+                if (_isLinking)
+                  Positioned.fill(
+                    child: IgnorePointer(
+                      child: CustomPaint(
+                        painter: LinkPreviewPainter(
+                          start: _sceneToViewport(_linkStartScene),
+                          end: _hoverTargetId != null
+                              ? _snappedEndViewport
+                              : _linkCurrentViewport,
+                        ),
+                      ),
+                    ),
+                  ),
+
+                // Loading / Empty state
+                if (_isLoading)
+                  const Center(child: CircularProgressIndicator())
+                else if (isEmpty)
+                  Center(
+                    child: Padding(
+                      padding: const EdgeInsets.all(18),
+                      child: Material(
+                        elevation: 2,
+                        borderRadius: BorderRadius.circular(18),
+                        color: _TreeGreenTheme.surface,
+                        child: Padding(
+                          padding: const EdgeInsets.fromLTRB(18, 16, 18, 16),
+                          child: Column(
+                            mainAxisSize: MainAxisSize.min,
                             children: [
-                              if (!isEmpty)
-                                CustomPaint(
-                                  size: canvasSize,
-                                  painter: ConnectorPainter(
-                                    store: store,
-                                    positions: layout,
-                                    cardSize: cardSize,
-                                  ),
-                                ),
-                              for (final entry in layout.entries)
-                                AnimatedNode(
-                                  node: store.getNode(entry.key),
-                                  topLeft: entry.value,
-                                  size: cardSize,
-                                  isSelected: _ctrlSelectedIds.contains(entry.key),
-                                  isHovered: _ctrlSelectedIds.contains(entry.key) ||
-                                      entry.key == _hoveredNodeId ||
-                                      (_isLinking && _linkFromNodeId == entry.key),
-                                  isDragging: _draggingNodeId == entry.key,
-                                  dragEnabled: !_isLinking && !_previewMode,
-                                  showPortsEnabled: !_previewMode && store.canEditNodeId(entry.key),
-                                  onHoverChanged: (hovering) {
-                                    if (!mounted) return;
-                                    setState(() {
-                                      if (hovering) {
-                                        _hoveredNodeId = entry.key;
-                                      } else if (_hoveredNodeId == entry.key) {
-                                        _hoveredNodeId = null;
-                                      }
-                                    });
-                                  },
-                                  onTapSelect: (id, globalPosition) {
-                                    if (_previewMode) {
-                                      _showDetailsPopup(
-                                        nodeId: id,
-                                        globalTapPosition: globalPosition,
-                                      );
-                                      return;
-                                    }
-
-                                    if (_isLinking) return;
-
-                                    if (_ctrlPressed) {
-                                      _toggleCtrlSelect(id);
-                                      return;
-                                    }
-
-                                    if (_ctrlSelectedIds.isNotEmpty) {
-                                      ScaffoldMessenger.of(context).showSnackBar(
-                                        const SnackBar(
-                                          content: Text('Selection active. Ctrl+Click tiles to unselect.'),
-                                        ),
-                                      );
-                                      return;
-                                    }
-
-                                    _openNodeActions(
-                                      nodeId: id,
-                                      globalTapPosition: globalPosition,
-                                    );
-                                  },
-                                  onDragStart: () {
-                                    if (_isLinking) return;
-                                    setState(() => _draggingNodeId = entry.key);
-                                    if (_ctrlPressed && !_ctrlSelectedIds.contains(entry.key)) {
-                                      _toggleCtrlSelect(entry.key);
-                                    }
-                                  },
-                                  onDragEnd: () {
-                                    if (!mounted) return;
-                                    setState(() => _draggingNodeId = null);
-                                  },
-                                  onDragDelta: (delta) {
-                                    if (_isLinking) return;
-                                    final draggedId = entry.key;
-                                    final ids = (_ctrlSelectedIds.isNotEmpty &&
-                                            _ctrlSelectedIds.contains(draggedId))
-                                        ? _ctrlSelectedIds
-                                        : <int>{draggedId};
-                                    if (ids.length == 1) {
-                                      store.addManualOffset(draggedId, delta);
-                                    } else {
-                                      store.addManualOffsetBulk(ids, delta);
-                                    }
-                                  },
-                                  onStartPortDrag: (port, globalStart) {
-                                    final topLeft = layout[entry.key]!;
-                                    final startScene = switch (port) {
-                                      LinkPort.parentTop =>
-                                        Offset(topLeft.dx + cardSize.width / 2, topLeft.dy),
-                                      LinkPort.childBottom => Offset(
-                                          topLeft.dx + cardSize.width / 2,
-                                          topLeft.dy + cardSize.height,
-                                        ),
-                                      LinkPort.spouseLeft =>
-                                        Offset(topLeft.dx, topLeft.dy + cardSize.height / 2),
-                                      LinkPort.spouseRight => Offset(
-                                          topLeft.dx + cardSize.width,
-                                          topLeft.dy + cardSize.height / 2,
-                                        ),
-                                    };
-                                    _startLink(
-                                      fromNodeId: entry.key,
-                                      port: port,
-                                      startScene: startScene,
-                                      startViewport: _globalToViewport(globalStart),
-                                    );
-                                  },
-                                  onUpdatePortDrag: (g) => _updateLink(_globalToViewport(g)),
-                                  onEndPortDrag: (g) => _endLink(_globalToViewport(g)),
-                                  onTapPort: _handlePortTap,
-                                ),
+                              const Icon(Icons.account_tree, size: 42),
+                              const SizedBox(height: 10),
+                              const Text(
+                                'Start your family tree',
+                                style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700),
+                              ),
+                              const SizedBox(height: 6),
+                              const Text(
+                                'Add your first member to begin.',
+                                style: TextStyle(color: _TreeGreenTheme.textMuted),
+                              ),
+                              const SizedBox(height: 14),
+                              FilledButton.icon(
+                                onPressed: _addFirstMemberFlow,
+                                icon: const Icon(Icons.person_add),
+                                label: const Text('Add First Member'),
+                              ),
                             ],
                           ),
                         ),
                       ),
                     ),
+                  ),
 
-                    // --- Link dragging preview ---
-                    if (_isLinking)
-                      Positioned.fill(
-                        child: IgnorePointer(
-                          child: CustomPaint(
-                            painter: LinkPreviewPainter(
-                              start: _sceneToViewport(_linkStartScene),
-                              end: _hoverTargetId != null
-                                  ? _snappedEndViewport
-                                  : _linkCurrentViewport,
+                // Zoom controls & add standalone button (bottom right)
+                if (!isEmpty)
+                  Positioned(
+                    right: 16,
+                    bottom: 16,
+                    child: Material(
+                      elevation: 2,
+                      color: _TreeGreenTheme.surface,
+                      borderRadius: BorderRadius.circular(16),
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            IconButton(
+                              tooltip: 'Zoom out',
+                              icon: const Icon(Icons.remove, size: 18),
+                              onPressed: () {
+                                final next = (_zoomValue / 1.15).clamp(_minZoom, _maxZoom);
+                                _setZoom(next);
+                              },
                             ),
-                          ),
-                        ),
-                      ),
-
-                    // --- Loading / Empty state ---
-                    if (_isLoading)
-                      const Center(child: CircularProgressIndicator())
-                    else if (isEmpty)
-                      Center(
-                        child: Padding(
-                          padding: const EdgeInsets.all(18),
-                          child: Material(
-                            elevation: 2,
-                            borderRadius: BorderRadius.circular(18),
-                            color: _TreeGreenTheme.surface,
-                            child: Padding(
-                              padding: const EdgeInsets.fromLTRB(18, 16, 18, 16),
-                              child: Column(
-                                mainAxisSize: MainAxisSize.min,
-                                children: [
-                                  const Icon(Icons.account_tree, size: 42),
-                                  const SizedBox(height: 10),
-                                  const Text(
-                                    'Start your family tree',
-                                    style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700),
-                                  ),
-                                  const SizedBox(height: 6),
-                                  const Text(
-                                    'Add your first member to begin.',
-                                    style: TextStyle(color: _TreeGreenTheme.textMuted),
-                                  ),
-                                  const SizedBox(height: 14),
-                                  FilledButton.icon(
-                                    onPressed: _addFirstMemberFlow,
-                                    icon: const Icon(Icons.person_add),
-                                    label: const Text('Add First Member'),
-                                  ),
-                                ],
+                            const SizedBox(width: 4),
+                            IconButton(
+                              tooltip: 'Zoom in',
+                              icon: const Icon(Icons.add, size: 18),
+                              onPressed: () {
+                                final next = (_zoomValue * 1.15).clamp(_minZoom, _maxZoom);
+                                _setZoom(next);
+                              },
+                            ),
+                            const SizedBox(width: 8),
+                            Container(width: 1, height: 22, color: _TreeGreenTheme.divider),
+                            const SizedBox(width: 8),
+                            IconButton(
+                              tooltip: 'Add standalone member',
+                              icon: const Icon(Icons.person_add_alt_1, size: 18),
+                              constraints: const BoxConstraints(
+                                minWidth: 40,
+                                minHeight: 40,
                               ),
+                              padding: const EdgeInsets.all(8),
+                              onPressed: _addStandaloneMemberFlow,
                             ),
-                          ),
-                        ),
-                      ),
-
-                    // --- Zoom slider & add standalone button ---
-                    if (!isEmpty)
-                      Positioned(
-                        right: 16,
-                        bottom: 16,
-                        child: Material(
-                          elevation: 2,
-                          color: _TreeGreenTheme.surface,
-                          borderRadius: BorderRadius.circular(16),
-                          child: Padding(
-                            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-                            child: SizedBox(
-                              width: 290,
-                              child: Row(
-                                children: [
-                                  IconButton(
-                                    tooltip: 'Zoom out',
-                                    icon: const Icon(Icons.remove, size: 18),
-                                    onPressed: () {
-                                      final next = (_zoomValue / 1.15).clamp(_minZoom, _maxZoom);
-                                      _setZoom(next);
-                                    },
-                                  ),
-                                  Expanded(
-                                    child: Slider(
-                                      value: _zoomValue.clamp(_minZoom, _maxZoom),
-                                      min: _minZoom,
-                                      max: _maxZoom,
-                                      onChanged: (v) => _setZoom(v),
-                                    ),
-                                  ),
-                                  IconButton(
-                                    tooltip: 'Zoom in',
-                                    icon: const Icon(Icons.add, size: 18),
-                                    onPressed: () {
-                                      final next = (_zoomValue * 1.15).clamp(_minZoom, _maxZoom);
-                                      _setZoom(next);
-                                    },
-                                  ),
-                                  const SizedBox(width: 6),
-                                  Container(width: 1, height: 22, color: _TreeGreenTheme.divider),
-                                  const SizedBox(width: 6),
-                                  IconButton(
-                                    tooltip: 'Add standalone member',
-                                    icon: const Icon(Icons.person_add_alt_1, size: 18),
-                                    onPressed: _addStandaloneMemberFlow,
-                                  ),
-                                ],
+                            IconButton(
+                              tooltip: _previewMode ? 'Exit Preview Mode' : 'Preview Mode',
+                              icon: Icon(
+                                _previewMode ? Icons.visibility_off : Icons.visibility,
+                                size: 18,
                               ),
+                              constraints: const BoxConstraints(
+                                minWidth: 40,
+                                minHeight: 40,
+                              ),
+                              padding: const EdgeInsets.all(8),
+                              onPressed: () {
+                                setState(() {
+                                  _previewMode = !_previewMode;
+                                });
+                              },
                             ),
-                          ),
-                        ),
-                      ),
-                  ],
-                ),
-              ),
-
-              // ===== SIDEBAR (does not shift) =====
-              Positioned(
-                left: 0,
-                top: 0,
-                bottom: 0,
-                width: _drawerWidth,
-                child: IgnorePointer(
-                  ignoring: !_isDrawerOpen || _drawerRequest == null,
-                  child: AnimatedSlide(
-                    duration: const Duration(milliseconds: 320),
-                    curve: Curves.easeOutQuart,
-                    offset: _isDrawerOpen && _drawerRequest != null
-                        ? Offset.zero
-                        : const Offset(-1.0, 0),
-                    child: AnimatedOpacity(
-                      duration: const Duration(milliseconds: 220),
-                      curve: Curves.easeOut,
-                      opacity: _isDrawerOpen && _drawerRequest != null ? 1 : 0,
-                      child: Material(
-                        elevation: 16,
-                        shadowColor: _TreeGreenTheme.shadow,
-                        color: _TreeGreenTheme.surface,
-                        child: SafeArea(
-                          child: _drawerRequest == null
-                              ? const SizedBox.shrink()
-                              : _MemberFormSidebar(
-                                  title: _drawerRequest!.title,
-                                  showNameField: _drawerRequest!.showNameField,
-                                  initialName: _drawerRequest!.initialName,
-                                  initialGender: _drawerRequest!.initialGender,
-                                  allowedGenders: _drawerRequest!.allowedGenders,
-                                  initialDetails: _drawerRequest!.initialDetails,
-                                  initialBirthday: _drawerRequest!.initialBirthday,
-                                  initialPhotoBytes: _drawerRequest!.initialPhotoBytes,
-                                  initialPhotoProvider: _drawerRequest!.initialPhotoProvider,
-                                  allowRemovePhoto: _drawerRequest!.allowRemovePhoto,
-                                  allowClearBirthday: _drawerRequest!.allowClearBirthday,
-                                  onCancel: _closeDrawerUnsaved,
-                                  onSave: _saveDrawer,
-                                ),
+                            IconButton(
+                              tooltip: 'Log out',
+                              icon: const Icon(Icons.logout, size: 18),
+                              constraints: const BoxConstraints(
+                                minWidth: 40,
+                                minHeight: 40,
+                              ),
+                              padding: const EdgeInsets.all(8),
+                              onPressed: _logout,
+                            ),
+                          ],
                         ),
                       ),
                     ),
                   ),
+
+                // ===== FLOATING SEARCH BAR (top right) =====
+                if (!isEmpty)
+                  Positioned(
+                    top: 16,
+                    right: 16,
+                    child: Material(
+                      elevation: 2,
+                      color: _TreeGreenTheme.surface,
+                      borderRadius: BorderRadius.circular(16),
+                      child: SizedBox(
+                        width: 250, // fixed width, not stretching
+                        child: TextField(
+                          controller: _searchController,
+                          decoration: InputDecoration(
+                            hintText: 'Search member...',
+                            prefixIcon: const Icon(Icons.search, color: _TreeGreenTheme.textMuted),
+                            suffixIcon: _searchController.text.isNotEmpty
+                                ? IconButton(
+                                    icon: const Icon(Icons.clear, size: 18),
+                                    onPressed: () {
+                                      _searchController.clear();
+                                      setState(() {}); // refresh suffix visibility
+                                    },
+                                  )
+                                : null,
+                            contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 12),
+                            border: OutlineInputBorder(
+                              borderRadius: BorderRadius.circular(16),
+                              borderSide: const BorderSide(color: _TreeGreenTheme.border),
+                            ),
+                            enabledBorder: OutlineInputBorder(
+                              borderRadius: BorderRadius.circular(16),
+                              borderSide: const BorderSide(color: _TreeGreenTheme.border),
+                            ),
+                            focusedBorder: OutlineInputBorder(
+                              borderRadius: BorderRadius.circular(16),
+                              borderSide: const BorderSide(color: _TreeGreenTheme.primary, width: 1.4),
+                            ),
+                            filled: true,
+                            fillColor: _TreeGreenTheme.softSurface,
+                            isDense: true,
+                          ),
+                          style: const TextStyle(fontSize: 14),
+                          onSubmitted: _handleSearch,
+                          onChanged: (_) => setState(() {}), // update suffix icon visibility
+                        ),
+                      ),
+                    ),
+                  ),
+              ],
+            ),
+          ),
+
+          // ===== SIDEBAR (does not shift) =====
+          Positioned(
+            left: 0,
+            top: 0,
+            bottom: 0,
+            width: drawerWidth,
+            child: IgnorePointer(
+              ignoring: !_isDrawerOpen || _drawerRequest == null,
+              child: AnimatedSlide(
+                duration: const Duration(milliseconds: 320),
+                curve: Curves.easeOutQuart,
+                offset: _isDrawerOpen && _drawerRequest != null
+                    ? Offset.zero
+                    : const Offset(-1.0, 0),
+                child: AnimatedOpacity(
+                  duration: const Duration(milliseconds: 220),
+                  curve: Curves.easeOut,
+                  opacity: _isDrawerOpen && _drawerRequest != null ? 1 : 0,
+                  child: Material(
+                    elevation: 16,
+                    shadowColor: _TreeGreenTheme.shadow,
+                    color: _TreeGreenTheme.surface,
+                    child: SafeArea(
+                      child: _drawerRequest == null
+                          ? const SizedBox.shrink()
+                          : _MemberFormSidebar(
+                              title: _drawerRequest!.title,
+                              showNameField: _drawerRequest!.showNameField,
+                              initialName: _drawerRequest!.initialName,
+                              initialGender: _drawerRequest!.initialGender,
+                              allowedGenders: _drawerRequest!.allowedGenders,
+                              initialDetails: _drawerRequest!.initialDetails,
+                              initialBirthday: _drawerRequest!.initialBirthday,
+                              initialPhotoBytes: _drawerRequest!.initialPhotoBytes,
+                              initialPhotoProvider: _drawerRequest!.initialPhotoProvider,
+                              allowRemovePhoto: _drawerRequest!.allowRemovePhoto,
+                              allowClearBirthday: _drawerRequest!.allowClearBirthday,
+                              onCancel: _closeDrawerUnsaved,
+                              onSave: _saveDrawer,
+                            ),
+                    ),
+                  ),
                 ),
               ),
-            ],
+            ),
           ),
-        );
-      },
+        ],
+      ),
     );
   }
 
@@ -3065,5 +3091,3 @@ class ConnectorPainter extends CustomPainter {
         oldDelegate.cardSize != cardSize;
   }
 }
-
-//test
