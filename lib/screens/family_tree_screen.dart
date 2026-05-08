@@ -1848,10 +1848,14 @@ class _FamilyTreeScreenState extends State<FamilyTreeScreen> {
                               ),
                               const SizedBox(height: 14),
                               FilledButton.icon(
-                                onPressed: _addFirstMemberFlow,
-                                icon: const Icon(Icons.person_add),
-                                label: const Text('Add First Member'),
-                              ),
+  style: FilledButton.styleFrom(
+    backgroundColor: _TreeGreenTheme.primary,    // green background
+    foregroundColor: Colors.white,               // white text/icon
+  ),
+  onPressed: _addFirstMemberFlow,
+  icon: const Icon(Icons.person_add),
+  label: const Text('Add First Member'),
+)
                             ],
                           ),
                         ),
@@ -2338,12 +2342,15 @@ class _MemberFormSidebarState extends State<_MemberFormSidebar> {
                   alignment: WrapAlignment.center,
                   spacing: 8,
                   runSpacing: 8,
-                  children: [
-                    OutlinedButton.icon(
-                      onPressed: _pickPhoto,
-                      icon: const Icon(Icons.photo_library_outlined),
-                      label: const Text('Choose Photo'),
-                    ),
+                  children: [OutlinedButton.icon(
+  style: OutlinedButton.styleFrom(
+    foregroundColor: _TreeGreenTheme.primary,   // changes icon + text color
+    side: const BorderSide(color: _TreeGreenTheme.primary),
+  ),
+  onPressed: _pickPhoto,
+  icon: const Icon(Icons.photo_library_outlined),
+  label: const Text('Choose Photo'),
+),
                     if (widget.allowRemovePhoto)
                       OutlinedButton.icon(
                         onPressed: () {
@@ -2474,17 +2481,25 @@ class _MemberFormSidebarState extends State<_MemberFormSidebar> {
             children: [
               Expanded(
                 child: OutlinedButton(
-                  onPressed: widget.onCancel,
-                  child: const Text('Cancel'),
-                ),
+  style: OutlinedButton.styleFrom(
+    foregroundColor: _TreeGreenTheme.primary,
+    side: const BorderSide(color: _TreeGreenTheme.primary),
+  ),
+  onPressed: widget.onCancel,
+  child: const Text('Cancel'),
+),
               ),
               const SizedBox(width: 12),
               Expanded(
                 child: FilledButton.icon(
-                  onPressed: _submit,
-                  icon: const Icon(Icons.save_outlined),
-                  label: const Text('Save'),
-                ),
+  style: FilledButton.styleFrom(
+    backgroundColor: _TreeGreenTheme.primary,
+    foregroundColor: Colors.white,
+  ),
+  onPressed: _submit,
+  icon: const Icon(Icons.save_outlined),
+  label: const Text('Save'),
+)
               ),
             ],
           ),
