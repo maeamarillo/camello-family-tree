@@ -1586,6 +1586,37 @@ class _FamilyTreeScreenState extends State<FamilyTreeScreen> {
     });
   }
 
+  // New method: focus on the topmost node at zoom 1.0
+  void _focusOnTopNode() {
+    if (_lastLayoutScene.isEmpty) return;
+
+    // Find the node with the smallest Y (topmost)
+    int? topNodeId;
+    double minY = double.infinity;
+    for (final e in _lastLayoutScene.entries) {
+      if (e.value.dy < minY) {
+        minY = e.value.dy;
+        topNodeId = e.key;
+      }
+    }
+
+    if (topNodeId == null) return;
+
+    final pos = _lastLayoutScene[topNodeId]!;
+    final screenSize = MediaQuery.of(context).size;
+    final viewportCenter = Offset(screenSize.width / 2, screenSize.height / 2);
+    final nodeCenter = pos + Offset(cardSize.width / 2, cardSize.height / 2);
+
+    _syncingFromController = true;
+    _tc.value = Matrix4.identity()
+      ..translate(viewportCenter.dx, viewportCenter.dy)
+      ..scale(1.0) // reset zoom to 1.0
+      ..translate(-nodeCenter.dx, -nodeCenter.dy);
+    _syncingFromController = false;
+
+    setState(() => _zoomValue = 1.0);
+  }
+
   @override
   Widget build(BuildContext context) {
     final layoutRaw = FamilyTreeLayout(
@@ -1602,13 +1633,12 @@ class _FamilyTreeScreenState extends State<FamilyTreeScreen> {
 
     _lastLayoutScene = layout;
 
-    final bounds = _computeBounds(layout);
-
+    // No auto-fit anymore; focus on top node if not done yet
     if (!_didInitialCenter && layout.isNotEmpty) {
       _didInitialCenter = true;
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (!mounted) return;
-        _fitToScreen(bounds);
+        _focusOnTopNode(); // replaces _fitToScreen(bounds)
       });
     }
 
@@ -1621,7 +1651,7 @@ class _FamilyTreeScreenState extends State<FamilyTreeScreen> {
 
     return Scaffold(
       backgroundColor: _TreeGreenTheme.scaffold,
-      // No AppBar – search is now a floating widget
+      // No AppBar
       body: Stack(
         children: [
           // ===== SHIFTING AREA =====
@@ -1916,7 +1946,7 @@ class _FamilyTreeScreenState extends State<FamilyTreeScreen> {
                       color: _TreeGreenTheme.surface,
                       borderRadius: BorderRadius.circular(16),
                       child: SizedBox(
-                        width: 250, // fixed width, not stretching
+                        width: 250,
                         child: TextField(
                           controller: _searchController,
                           decoration: InputDecoration(
@@ -1927,7 +1957,7 @@ class _FamilyTreeScreenState extends State<FamilyTreeScreen> {
                                     icon: const Icon(Icons.clear, size: 18),
                                     onPressed: () {
                                       _searchController.clear();
-                                      setState(() {}); // refresh suffix visibility
+                                      setState(() {});
                                     },
                                   )
                                 : null,
@@ -1945,12 +1975,12 @@ class _FamilyTreeScreenState extends State<FamilyTreeScreen> {
                               borderSide: const BorderSide(color: _TreeGreenTheme.primary, width: 1.4),
                             ),
                             filled: true,
-                            fillColor: _TreeGreenTheme.softSurface,
+                            fillColor: Colors.white,
                             isDense: true,
                           ),
                           style: const TextStyle(fontSize: 14),
                           onSubmitted: _handleSearch,
-                          onChanged: (_) => setState(() {}), // update suffix icon visibility
+                          onChanged: (_) => setState(() {}),
                         ),
                       ),
                     ),
@@ -2010,40 +2040,12 @@ class _FamilyTreeScreenState extends State<FamilyTreeScreen> {
     );
   }
 
-  Rect _computeBounds(Map<int, Offset> pos) {
-    if (pos.isEmpty) return const Rect.fromLTWH(0, 0, 800, 600);
-
-    double minX = double.infinity;
-    double minY = double.infinity;
-    double maxX = -double.infinity;
-    double maxY = -double.infinity;
-
-    for (final p in pos.values) {
-      minX = min(minX, p.dx);
-      minY = min(minY, p.dy);
-      maxX = max(maxX, p.dx + cardSize.width);
-      maxY = max(maxY, p.dy + cardSize.height);
-    }
-
-    const double margin = 300;
-    return Rect.fromLTRB(minX - margin, minY - margin, maxX + margin, maxY + margin);
-  }
-
-  void _fitToScreen(Rect bounds) {
-    final screenSize = MediaQuery.of(context).size;
-    final scale =
-        min(screenSize.width / bounds.width, screenSize.height / bounds.height) * 1.0;
-
-    _syncingFromController = true;
-    _tc.value = Matrix4.identity()
-      ..translate(screenSize.width / 2, screenSize.height / 2)
-      ..scale(scale)
-      ..translate(-bounds.center.dx, -bounds.center.dy);
-    _syncingFromController = false;
-
-    setState(() => _zoomValue = scale.clamp(_minZoom, _maxZoom));
-  }
+  // Removed _computeBounds and _fitToScreen as they are no longer used
 }
+
+// The rest of the file remains the same: _MemberFormSidebar, AnimatedNode, MemberCard, etc.
+// Include them exactly as provided in the previous full code.
+// (Repeated below for completeness)
 
 /* =========================
    Drawer form
