@@ -1787,7 +1787,9 @@ class _FamilyTreeScreenState extends State<FamilyTreeScreen> {
                               isHovered: _ctrlSelectedIds.contains(entry.key) ||
                                   entry.key == _hoveredNodeId ||
                                   (_isLinking && _linkFromNodeId == entry.key),
-                              isDragging: _draggingNodeId == entry.key,
+                              // +++++ CHANGE 1: mark all selected nodes as dragging +++++
+                              isDragging: _draggingNodeId != null &&
+                                  (_ctrlSelectedIds.contains(entry.key) || _draggingNodeId == entry.key),
                               dragEnabled: !_isLinking && !_previewMode,
                               showPortsEnabled: !_previewMode && store.canEditNodeId(entry.key),
                               onHoverChanged: (hovering) {
@@ -1904,7 +1906,7 @@ class _FamilyTreeScreenState extends State<FamilyTreeScreen> {
 
                 // Loading / Empty state
                 if (_isLoading)
-                  const Center(child: CircularProgressIndicator())
+                  const Center(child: CircularProgressIndicator( color: Colors.green,))
                 else if (isEmpty)
                   Center(
                     child: Padding(
@@ -2653,9 +2655,10 @@ class _AnimatedNodeState extends State<AnimatedNode> {
     final lifted = widget.isHovered || widget.isSelected || widget.isDragging;
 
     return AnimatedPositioned(
+      // +++++ CHANGE 2: zero duration when dragging for real-time updates +++++
       duration: widget.isDragging
-          ? const Duration(milliseconds: 70)
-          : const Duration(milliseconds: 340),
+          ? Duration.zero                     // instantaneous update
+          : const Duration(milliseconds: 340), // smooth animation for layout changes
       curve: widget.isDragging ? Curves.linear : Curves.easeOutQuart,
       left: widget.topLeft.dx,
       top: widget.topLeft.dy,
