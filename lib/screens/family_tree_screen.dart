@@ -1,6 +1,7 @@
 // lib/screens/family_tree_screen.dart
 import 'dart:async';
 import 'dart:math';
+import 'dart:ui' as ui;
 
 import 'package:app/screens/auth/auth_service.dart';
 import 'package:app/screens/auth/desktop_body.dart';
@@ -33,9 +34,7 @@ class _TreeGreenTheme {
   static const Color scaffold = Color(0xFFF3FBF5);
   static const Color surface = Color(0xFFFFFFFF);
   static const Color softSurface = Color(0xFFF7FCF8);
-  static const Color appBar = Color(0xFFE2F3E7);
   static const Color primary = Color(0xFF2E7D5A);
-  static const Color primaryDark = Color(0xFF235E44);
   static const Color accent = Color(0xFF67B37F);
   static const Color border = Color(0xFFCFE5D6);
   static const Color divider = Color(0xFFD9EADF);
@@ -167,6 +166,12 @@ class _FamilyTreeScreenState extends State<FamilyTreeScreen> {
   StreamSubscription<User?>? _authSub;
   bool _loadedOnce = false;
 
+  /// The padded tile image used by the watermark shader.
+  /// Spacing between logos is baked in as transparent padding.
+  ui.Image? _watermarkTile;
+  ImageStream? _watermarkStream;
+  late final ImageStreamListener _watermarkListener;
+
   _MemberFormDrawerRequest? _drawerRequest;
   Completer<MemberFormResult>? _drawerCompleter;
 
@@ -190,6 +195,7 @@ class _FamilyTreeScreenState extends State<FamilyTreeScreen> {
     store = FamilyTreeStore();
 
     Future.microtask(_ensureLoadedFromCloud);
+    _loadWatermarkImage();
 
     _authSub = FirebaseAuth.instance.authStateChanges().listen((user) async {
       if (!mounted) return;
@@ -206,8 +212,76 @@ class _FamilyTreeScreenState extends State<FamilyTreeScreen> {
     });
   }
 
+  /// Loads the logo from the network, then composites it into a larger
+  /// transparent tile (logo + padding) so spacing is baked into the shader.
+  void _loadWatermarkImage() {
+    const url =
+        'https://raw.githubusercontent.com/maeamarillo/camello-family-tree/main/assets/images/camello-logo.PNG';
+    _watermarkListener = ImageStreamListener((info, _) async {
+      if (!mounted) return;
+      final tile = await _buildDiamondTile(
+        src: info.image,
+        logoSize: 140,
+        padding: 120,
+      );
+      if (!mounted) return;
+      setState(() => _watermarkTile = tile);
+    });
+    _watermarkStream =
+        NetworkImage(url).resolve(ImageConfiguration.empty);
+    _watermarkStream!.addListener(_watermarkListener);
+  }
+
+  /// Builds a tile that produces a diamond (offset-row) pattern when repeated.
+  ///
+  /// The tile is [step] × [step*2] where step = logoSize + padding.
+  ///   • Row A: one logo centred at (step/2, step/2)
+  ///   • Row B: logo centred at x = 0 (edges wrap) and x = step, y = step*1.5
+  ///
+  /// When the GPU tiles this, row B is offset by step/2 horizontally, giving
+  /// the classic diamond / brick stagger.
+  static Future<ui.Image> _buildDiamondTile({
+    required ui.Image src,
+    required double logoSize,
+    required double padding,
+  }) async {
+    final step = logoSize + padding;
+    final tileW = step;
+    final tileH = step * 2;
+
+    final recorder = ui.PictureRecorder();
+    final c = Canvas(recorder);
+    final srcRect =
+        Rect.fromLTWH(0, 0, src.width.toDouble(), src.height.toDouble());
+    final paint = Paint()..filterQuality = FilterQuality.medium;
+
+    // Row A — centred in the top half of the tile.
+    c.drawImageRect(
+      src, srcRect,
+      Rect.fromCenter(
+          center: Offset(step / 2, step / 2),
+          width: logoSize, height: logoSize),
+      paint,
+    );
+
+    // Row B — offset by step/2 horizontally; drawn at both edges so the
+    // repeat seam is seamless.
+    for (final x in [0.0, step]) {
+      c.drawImageRect(
+        src, srcRect,
+        Rect.fromCenter(
+            center: Offset(x, step * 1.5),
+            width: logoSize, height: logoSize),
+        paint,
+      );
+    }
+
+    return (recorder.endRecording()).toImage(tileW.round(), tileH.round());
+  }
+
   @override
   void dispose() {
+    _watermarkStream?.removeListener(_watermarkListener);
     if (_drawerCompleter != null && !_drawerCompleter!.isCompleted) {
       _drawerCompleter!.complete(
         const MemberFormResult(
@@ -1686,6 +1760,15 @@ class _FamilyTreeScreenState extends State<FamilyTreeScreen> {
                       child: Stack(
                         clipBehavior: Clip.none,
                         children: [
+                          // ── Watermark: lives inside the virtual canvas so
+                          //    it pans/zooms with the nodes. ImageShader means
+                          //    one GPU draw call; Skia only rasterizes the
+                          //    visible clip region — no loop, no lag.
+                          if (_watermarkTile != null)
+                            CustomPaint(
+                              size: canvasSize,
+                              painter: _WatermarkPainter(_watermarkTile!),
+                            ),
                           if (!isEmpty)
                             CustomPaint(
                               size: canvasSize,
@@ -3107,4 +3190,43 @@ class ConnectorPainter extends CustomPainter {
         oldDelegate.store != store ||
         oldDelegate.cardSize != cardSize;
   }
+}
+
+// ─── Watermark painter ────────────────────────────────────────────────────────
+//
+// Uses ui.ImageShader with TileMode.repeated — a single GPU draw call.
+// Spacing between logos is baked into the tile image itself (transparent
+// padding), so there's nothing to loop over here.
+//
+class _WatermarkPainter extends CustomPainter {
+  const _WatermarkPainter(this.tile);
+
+  final ui.Image tile;
+
+  static const double _opacity = 0.07;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    // The shader matrix maps tile pixels 1-to-1 to canvas (scene) pixels.
+    // Because the tile already contains the logo + padding, the GPU repeats
+    // it perfectly across the entire 100 000 × 100 000 virtual canvas.
+    final shader = ui.ImageShader(
+      tile,
+      TileMode.repeated,
+      TileMode.repeated,
+      Matrix4.identity().storage,
+    );
+
+    // saveLayer applies opacity cheaply in one composite pass.
+    canvas.saveLayer(
+      Offset.zero & size,
+      // ignore: deprecated_member_use
+      Paint()..color = const Color(0xFFFFFFFF).withOpacity(_opacity),
+    );
+    canvas.drawRect(Offset.zero & size, Paint()..shader = shader);
+    canvas.restore();
+  }
+
+  @override
+  bool shouldRepaint(covariant _WatermarkPainter old) => old.tile != tile;
 }

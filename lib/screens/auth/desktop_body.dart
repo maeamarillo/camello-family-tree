@@ -26,12 +26,113 @@ class DesktopBody extends StatelessWidget {
           ),
         ),
       ),
-      initialRoute: LoginPage.route,
+      // Start with the asset preloader instead of login
+      initialRoute: AssetPreloadPage.route,
       routes: {
+        AssetPreloadPage.route: (_) => const AssetPreloadPage(),
         LoginPage.route: (_) => const LoginPage(),
         RegisterPage.route: (_) => const RegisterPage(),
       },
     );
+  }
+}
+
+/* -------------------------------------------------------------------------- */
+/*                         ASSET PRELOADER (NEW)                              */
+/* -------------------------------------------------------------------------- */
+
+class AssetPreloadPage extends StatefulWidget {
+  static const route = '/preload';
+  const AssetPreloadPage({super.key});
+
+  @override
+  State<AssetPreloadPage> createState() => _AssetPreloadPageState();
+}
+
+class _AssetPreloadPageState extends State<AssetPreloadPage> {
+  bool _isLoading = true;
+  String? _error;
+
+  // URLs used in AuthScaffold and AppLogo
+  static const _backgroundUrl =
+      'https://raw.githubusercontent.com/maeamarillo/camello-family-tree/main/assets/images/camello-background.jpg';
+  static const _logoUrl =
+      'https://raw.githubusercontent.com/maeamarillo/camello-family-tree/main/assets/images/camello-logo.PNG';
+
+  @override
+  void initState() {
+    super.initState();
+    // Precache after the first frame so we have a valid BuildContext
+    WidgetsBinding.instance.addPostFrameCallback((_) => _preloadAssets());
+  }
+
+  Future<void> _preloadAssets() async {
+    try {
+      await Future.wait([
+        precacheImage(const NetworkImage(_backgroundUrl), context),
+        precacheImage(const NetworkImage(_logoUrl), context),
+      ]);
+      if (!mounted) return;
+      setState(() {
+        _isLoading = false;
+        _error = null;
+      });
+      // Navigate to login, replacing the preload page
+      Navigator.pushReplacementNamed(context, LoginPage.route);
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _isLoading = false;
+        _error = 'Failed to load required assets. Check your connection.';
+      });
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_isLoading) {
+      return const Scaffold(
+        body: Center(child: CircularProgressIndicator(
+          color: Colors.green,
+        )),
+      );
+    }
+
+    if (_error != null) {
+      return Scaffold(
+        body: Center(
+          child: Padding(
+            padding: const EdgeInsets.all(20),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const Icon(Icons.error_outline, size: 64, color: Colors.red),
+                const SizedBox(height: 16),
+                Text(
+                  _error!,
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(fontSize: 16),
+                ),
+                const SizedBox(height: 24),
+                ElevatedButton(
+                  onPressed: () {
+                    setState(() {
+                      _isLoading = true;
+                      _error = null;
+                    });
+                    _preloadAssets();
+                  },
+                  child: const Text('Retry'),
+                ),
+              ],
+            ),
+          ),
+        ),
+      );
+    }
+
+    // Should never reach here because on success we navigate away immediately
+    return const SizedBox.shrink();
   }
 }
 
@@ -60,7 +161,6 @@ class _LoginPageState extends State<LoginPage> {
   }
 
   Future<void> login() async {
-    // ✅ capture BEFORE async gap (no BuildContext across await)
     final messenger = ScaffoldMessenger.of(context);
 
     try {
@@ -68,8 +168,6 @@ class _LoginPageState extends State<LoginPage> {
         email: email.text,
         password: password.text,
       );
-
-      // ✅ No navigation here.
       // AuthGate will detect login and show DashboardPage automatically.
     } on FirebaseAuthException catch (e) {
       messenger.showSnackBar(
@@ -89,7 +187,7 @@ class _LoginPageState extends State<LoginPage> {
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Center(child: const AppLogo()),
+          const Center(child: AppLogo()),
           const SizedBox(height: 20),
           const AuthHeader(
             title: 'Log In',
@@ -125,10 +223,8 @@ class _LoginPageState extends State<LoginPage> {
             child: LinkRow(
               leading: "Don’t have an account? ",
               action: "Register",
-              onTap: () => Navigator.pushReplacementNamed(
-                context,
-                RegisterPage.route,
-              ),
+              onTap: () =>
+                  Navigator.pushReplacementNamed(context, RegisterPage.route),
             ),
           ),
         ],
@@ -162,7 +258,6 @@ class _RegisterPageState extends State<RegisterPage> {
   }
 
   Future<void> register() async {
-    // ✅ capture BEFORE async gap (no BuildContext across await)
     final messenger = ScaffoldMessenger.of(context);
 
     try {
@@ -171,7 +266,6 @@ class _RegisterPageState extends State<RegisterPage> {
         password: password.text,
       );
 
-      // ✅ navigation after await must be guarded
       if (!mounted) return;
       Navigator.pushReplacementNamed(context, LoginPage.route);
     } on FirebaseAuthException catch (e) {
@@ -192,7 +286,7 @@ class _RegisterPageState extends State<RegisterPage> {
         crossAxisAlignment: CrossAxisAlignment.start,
         mainAxisSize: MainAxisSize.min,
         children: [
-          Center(child: const AppLogo()),
+          const Center(child: AppLogo()),
           const SizedBox(height: 20),
           const AuthHeader(
             title: 'Register',
@@ -228,10 +322,8 @@ class _RegisterPageState extends State<RegisterPage> {
             child: LinkRow(
               leading: "Already have an account? ",
               action: "Sign in",
-              onTap: () => Navigator.pushReplacementNamed(
-                context,
-                LoginPage.route,
-              ),
+              onTap: () =>
+                  Navigator.pushReplacementNamed(context, LoginPage.route),
             ),
           ),
         ],
