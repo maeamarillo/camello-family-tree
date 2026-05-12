@@ -127,6 +127,17 @@ class _MemberFormDrawerRequest {
   final bool allowClearBirthday;
 }
 
+class TreeBanner {
+  TreeBanner({
+    required this.id,
+    required this.text,
+    required this.position,
+  });
+
+  final int id;
+  String text;
+  Offset position;
+}
 class _FamilyTreeScreenState extends State<FamilyTreeScreen> {
   late final FamilyTreeStore store;
   final CloudinaryService _cloudinary = CloudinaryService();
@@ -772,43 +783,46 @@ class _FamilyTreeScreenState extends State<FamilyTreeScreen> {
     navigator.pushNamedAndRemoveUntil(LoginPage.route, (route) => false);
   }
 
-  Future<void> _applyFormToNode(int nodeId, MemberFormResult r) async {
-    debugPrint('APPLY FORM CALLED nodeId=$nodeId saved=${r.saved}');
-    if (!r.saved) return;
+Future<void> _applyFormToNode(int nodeId, MemberFormResult r) async {
+  if (!r.saved) return;
 
-    store.setGender(nodeId, r.gender);
-    store.setDetails(nodeId, r.details);
+  // 1. Update basic details immediately
+  store.setGender(nodeId, r.gender);
+  store.setDetails(nodeId, r.details);
+  store.setBirthday(nodeId, r.clearBirthday ? null : r.birthday);
 
-    if (r.clearBirthday) {
-      store.setBirthday(nodeId, null);
-    } else {
-      store.setBirthday(nodeId, r.birthday);
-    }
-
-    if (r.removePhoto) {
-      store.removePhoto(nodeId);
-      return;
-    }
-
-    if (r.newPhotoBytes != null) {
-      final messenger = ScaffoldMessenger.of(context);
-
-      try {
-        final photoUrl = await _cloudinary.uploadBytes(
-          r.newPhotoBytes!,
-          fileName: 'node_$nodeId.jpg',
-        );
-
-        if (!mounted) return;
-        store.setPhotoUrl(nodeId, photoUrl);
-      } catch (e) {
-        if (!mounted) return;
-        messenger.showSnackBar(
-          SnackBar(content: Text('Photo upload failed: $e')),
-        );
-      }
-    }
+  if (r.removePhoto) {
+    store.removePhoto(nodeId);
+    return;
   }
+
+  // 2. OPTIMISTIC UPDATE: Set local bytes immediately for instant preview
+  if (r.newPhotoBytes != null) {
+    setState(() {
+      final node = store.getNode(nodeId);
+      node.photoBytes = r.newPhotoBytes; // Show local version immediately
+      node.photoUrl = null;             // Ensure widget uses bytes
+    });
+
+    // 3. Trigger background upload without 'awaiting' it for the UI
+    _uploadPhotoBackground(nodeId, r.newPhotoBytes!);
+  }
+}
+
+// Add this helper method to handle background upload
+Future<void> _uploadPhotoBackground(int nodeId, Uint8List bytes) async {
+  try {
+    final photoUrl = await _cloudinary.uploadBytes(
+      bytes,
+      fileName: 'node_$nodeId.jpg',
+    );
+    if (mounted) {
+      store.setPhotoUrl(nodeId, photoUrl); // Sync with cloud URL once done
+    }
+  } catch (e) {
+    debugPrint('Background photo upload failed: $e');
+  }
+}
 
   Future<void> _editDetailsFlow(int nodeId) async {
     final n = store.getNode(nodeId);
@@ -917,6 +931,7 @@ class _FamilyTreeScreenState extends State<FamilyTreeScreen> {
       xAccount: r.details.xAccount,
       tiktok: r.details.tiktok,
     );
+    
   }
 
   Future<void> _addStandaloneMemberFlow() async {
@@ -1360,8 +1375,11 @@ class _FamilyTreeScreenState extends State<FamilyTreeScreen> {
           ),
         );
 
-        if (!mounted) return;
-        if (ok == true) store.deleteNode(nodeId);
+        if (ok == true && mounted) {
+    setState(() {
+      store.deleteNode(nodeId);
+    });
+  }
         break;
     }
   }
@@ -1787,7 +1805,8 @@ class _FamilyTreeScreenState extends State<FamilyTreeScreen> {
                               isHovered: _ctrlSelectedIds.contains(entry.key) ||
                                   entry.key == _hoveredNodeId ||
                                   (_isLinking && _linkFromNodeId == entry.key),
-                              // +++++ CHANGE 1: mark all selected nodes as dragging +++++
+                              // Mark nodes as dragging: the dragged node itself, plus any ctrl-selected
+                              // When isDragging=true, AnimatedPositioned uses Duration.zero for instant updates
                               isDragging: _draggingNodeId != null &&
                                   (_ctrlSelectedIds.contains(entry.key) || _draggingNodeId == entry.key),
                               dragEnabled: !_isLinking && !_previewMode,
@@ -1834,6 +1853,7 @@ class _FamilyTreeScreenState extends State<FamilyTreeScreen> {
                               },
                               onDragStart: () {
                                 if (_isLinking) return;
+                                // Mark as dragging to enable Duration.zero in AnimatedPositioned
                                 setState(() => _draggingNodeId = entry.key);
                                 if (_ctrlPressed && !_ctrlSelectedIds.contains(entry.key)) {
                                   _toggleCtrlSelect(entry.key);
@@ -1841,18 +1861,24 @@ class _FamilyTreeScreenState extends State<FamilyTreeScreen> {
                               },
                               onDragEnd: () {
                                 if (!mounted) return;
+                                // Clear dragging to restore smooth animation for layout changes
                                 setState(() => _draggingNodeId = null);
                               },
                               onDragDelta: (delta) {
                                 if (_isLinking) return;
                                 final draggedId = entry.key;
+                                
+                                // Handle single vs. multiple selected nodes
                                 final ids = (_ctrlSelectedIds.isNotEmpty &&
                                         _ctrlSelectedIds.contains(draggedId))
                                     ? _ctrlSelectedIds
                                     : <int>{draggedId};
+                                
+                                // Update store (triggers rebuild with new positions)
                                 if (ids.length == 1) {
                                   store.addManualOffset(draggedId, delta);
                                 } else {
+                                  // Bulk update for better performance with multiple nodes
                                   store.addManualOffsetBulk(ids, delta);
                                 }
                               },
@@ -2655,10 +2681,9 @@ class _AnimatedNodeState extends State<AnimatedNode> {
     final lifted = widget.isHovered || widget.isSelected || widget.isDragging;
 
     return AnimatedPositioned(
-      // +++++ CHANGE 2: zero duration when dragging for real-time updates +++++
-      duration: widget.isDragging
-          ? Duration.zero                     // instantaneous update
-          : const Duration(milliseconds: 340), // smooth animation for layout changes
+      // Real-time dragging: zero duration while dragging for instant visual feedback
+      // Smooth animation when released so layout changes feel polished
+      duration: widget.isDragging ? Duration.zero : const Duration(milliseconds: 340),
       curve: widget.isDragging ? Curves.linear : Curves.easeOutQuart,
       left: widget.topLeft.dx,
       top: widget.topLeft.dy,
