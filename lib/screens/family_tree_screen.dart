@@ -221,10 +221,11 @@ class _FamilyTreeScreenState extends State<FamilyTreeScreen> {
 
     _tc.addListener(() {
       if (!mounted || _syncingFromController) return;
+      // Update _zoomValue without setState — InteractiveViewer renders the
+      // zoom transform itself; we only need _zoomValue current for drag-delta
+      // correction and programmatic navigation, not for widget rebuilds.
       final s = _tc.value.getMaxScaleOnAxis().clamp(_minZoom, _maxZoom);
-      if ((s - _zoomValue).abs() > 0.005) {
-        setState(() => _zoomValue = s);
-      }
+      _zoomValue = s;
     });
   }
 
@@ -1819,7 +1820,6 @@ Future<void> _uploadPhotoBackground(int nodeId, Uint8List bytes) async {
                                   (_ctrlSelectedIds.contains(entry.key) || _draggingNodeId == entry.key),
                               dragEnabled: !_isLinking && !_previewMode,
                               showPortsEnabled: !_previewMode && store.canEditNodeId(entry.key),
-                              zoomScale: _zoomValue,
                               onHoverChanged: (hovering) {
                                 if (!mounted) return;
                                 setState(() {
@@ -2653,7 +2653,6 @@ class AnimatedNode extends StatefulWidget {
     required this.onHoverChanged,
     required this.dragEnabled,
     required this.showPortsEnabled,
-    this.zoomScale = 1.0,
   });
 
   final FamilyNode node;
@@ -2685,10 +2684,6 @@ class AnimatedNode extends StatefulWidget {
   final ValueChanged<bool> onHoverChanged;
   final bool dragEnabled;
   final bool showPortsEnabled;
-
-  /// Current zoom level from TransformationController.
-  /// Used to convert screen-space drag deltas to scene-space.
-  final double zoomScale;
 
   @override
   State<AnimatedNode> createState() => _AnimatedNodeState();
@@ -2727,21 +2722,21 @@ class _AnimatedNodeState extends State<AnimatedNode> {
   }
 
   void _onPanUpdate(DragUpdateDetails d) {
-    // DragUpdateDetails.delta is always in *screen* pixels.
-    // Divide by zoom so the node tracks the pointer 1-to-1 in scene space.
-    final zoom = widget.zoomScale;
-    final sceneDelta = zoom > 0 ? d.delta / zoom : d.delta;
-    _localDrag += sceneDelta;
+    // d.delta is already in scene coordinates — Flutter transforms pointer
+    // events through the InteractiveViewer's render transform automatically.
+    // Dividing by zoom would double-correct and cause nodes to move at the
+    // wrong speed depending on zoom level.
+    _localDrag += d.delta;
 
     // Update only the Positioned — no setState, no widget rebuild.
     _posNotifier.value = widget.topLeft + _localDrag;
 
-    // Update shared connector notifier (mutate in place, then reassign
-    // so ValueListenableBuilder detects the change).
+    // Always assign a new Map so ValueNotifier's identical() check sees a
+    // change and notifies listeners every frame — on mobile this is the
+    // difference between connectors updating in real time vs. not at all.
     final n = widget.dragOverlayNotifier;
     if (n != null) {
-      n.value[widget.node.id] = _posNotifier.value;
-      n.value = n.value;
+      n.value = {...n.value, widget.node.id: _posNotifier.value};
     }
   }
 
