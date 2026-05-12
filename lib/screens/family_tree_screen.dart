@@ -968,7 +968,7 @@ Future<void> _uploadPhotoBackground(int nodeId, Uint8List bytes) async {
     final photoUrl = await _uploadPhotoIfNeeded(r.newPhotoBytes, 'member');
     if (!mounted) return;
 
-    store.addStandalone(
+    final newNode = store.addStandalone(
       name: name,
       gender: r.gender,
       birthday: r.clearBirthday ? null : r.birthday,
@@ -983,6 +983,17 @@ Future<void> _uploadPhotoBackground(int nodeId, Uint8List bytes) async {
       xAccount: r.details.xAccount,
       tiktok: r.details.tiktok,
     );
+
+    // Wait two frames: first for the store to notify and trigger a build,
+    // second for the layout to compute the new node's position so _focusNode
+    // can find it in _lastLayoutScene.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        _focusNode(newNode.id);
+      });
+    });
   }
 
   Future<void> _showDetailsPopup({
