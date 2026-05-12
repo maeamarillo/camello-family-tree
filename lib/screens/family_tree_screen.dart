@@ -172,6 +172,11 @@ class _FamilyTreeScreenState extends State<FamilyTreeScreen> {
   int? _draggingNodeId;
   Map<int, Offset> _lastLayoutScene = {};
 
+  /// Notifier for live drag positions — updated every pointer frame inside
+  /// [_AnimatedNodeState] without triggering a parent setState.
+  final ValueNotifier<Map<int, Offset>> _dragOverlayNotifier =
+      ValueNotifier(<int, Offset>{});
+
   final Set<int> _ctrlSelectedIds = <int>{};
 
   StreamSubscription<User?>? _authSub;
@@ -310,6 +315,7 @@ class _FamilyTreeScreenState extends State<FamilyTreeScreen> {
 
     _authSub?.cancel();
     _searchController.dispose();
+    _dragOverlayNotifier.dispose();
     store.dispose();
     _tc.dispose();
     super.dispose();
@@ -1787,14 +1793,16 @@ Future<void> _uploadPhotoBackground(int nodeId, Uint8List bytes) async {
                               size: canvasSize,
                               painter: _WatermarkPainter(_watermarkTile!),
                             ),
+                          // Single connector layer: ValueListenableBuilder merges
+                          // live drag positions over the base layout so the
+                          // static ghost line is never visible.
                           if (!isEmpty)
-                            CustomPaint(
-                              size: canvasSize,
-                              painter: ConnectorPainter(
-                                store: store,
-                                positions: layout,
-                                cardSize: cardSize,
-                              ),
+                            _LiveConnectorOverlay(
+                              store: store,
+                              basePositions: layout,
+                              dragOverlayNotifier: _dragOverlayNotifier,
+                              cardSize: cardSize,
+                              canvasSize: canvasSize,
                             ),
                           for (final entry in layout.entries)
                             AnimatedNode(
@@ -1811,6 +1819,7 @@ Future<void> _uploadPhotoBackground(int nodeId, Uint8List bytes) async {
                                   (_ctrlSelectedIds.contains(entry.key) || _draggingNodeId == entry.key),
                               dragEnabled: !_isLinking && !_previewMode,
                               showPortsEnabled: !_previewMode && store.canEditNodeId(entry.key),
+                              zoomScale: _zoomValue,
                               onHoverChanged: (hovering) {
                                 if (!mounted) return;
                                 setState(() {
@@ -1851,9 +1860,10 @@ Future<void> _uploadPhotoBackground(int nodeId, Uint8List bytes) async {
                                   globalTapPosition: globalPosition,
                                 );
                               },
+                              dragOverlayNotifier: _dragOverlayNotifier,
                               onDragStart: () {
                                 if (_isLinking) return;
-                                // Mark as dragging to enable Duration.zero in AnimatedPositioned
+                                // Mark as dragging — only triggers one setState here
                                 setState(() => _draggingNodeId = entry.key);
                                 if (_ctrlPressed && !_ctrlSelectedIds.contains(entry.key)) {
                                   _toggleCtrlSelect(entry.key);
@@ -1861,25 +1871,23 @@ Future<void> _uploadPhotoBackground(int nodeId, Uint8List bytes) async {
                               },
                               onDragEnd: () {
                                 if (!mounted) return;
-                                // Clear dragging to restore smooth animation for layout changes
                                 setState(() => _draggingNodeId = null);
                               },
-                              onDragDelta: (delta) {
+                              onDragAccumulated: (totalDelta) {
                                 if (_isLinking) return;
                                 final draggedId = entry.key;
-                                
+
                                 // Handle single vs. multiple selected nodes
                                 final ids = (_ctrlSelectedIds.isNotEmpty &&
                                         _ctrlSelectedIds.contains(draggedId))
                                     ? _ctrlSelectedIds
                                     : <int>{draggedId};
-                                
-                                // Update store (triggers rebuild with new positions)
+
+                                // Commit to store only once per drag gesture — no per-frame rebuilds
                                 if (ids.length == 1) {
-                                  store.addManualOffset(draggedId, delta);
+                                  store.addManualOffset(draggedId, totalDelta);
                                 } else {
-                                  // Bulk update for better performance with multiple nodes
-                                  store.addManualOffsetBulk(ids, delta);
+                                  store.addManualOffsetBulk(ids, totalDelta);
                                 }
                               },
                               onStartPortDrag: (port, globalStart) {
@@ -2631,9 +2639,10 @@ class AnimatedNode extends StatefulWidget {
     required this.topLeft,
     required this.size,
     required this.onTapSelect,
-    required this.onDragDelta,
+    required this.onDragAccumulated,
     required this.onDragStart,
     required this.onDragEnd,
+    this.dragOverlayNotifier,
     required this.onStartPortDrag,
     required this.onUpdatePortDrag,
     required this.onEndPortDrag,
@@ -2644,6 +2653,7 @@ class AnimatedNode extends StatefulWidget {
     required this.onHoverChanged,
     required this.dragEnabled,
     required this.showPortsEnabled,
+    this.zoomScale = 1.0,
   });
 
   final FamilyNode node;
@@ -2652,9 +2662,16 @@ class AnimatedNode extends StatefulWidget {
 
   final void Function(int id, Offset globalPosition) onTapSelect;
 
-  final ValueChanged<Offset> onDragDelta;
+  /// Called once on drag-end with the total accumulated delta (scene-space).
+  /// The parent commits it to the store only at this point, avoiding a full
+  /// rebuild + layout recompute on every pointer event.
+  final ValueChanged<Offset> onDragAccumulated;
   final VoidCallback onDragStart;
   final VoidCallback onDragEnd;
+
+  /// Notifier updated every pointer frame so the connector painter can
+  /// follow the dragged node without rebuilding anything else.
+  final ValueNotifier<Map<int, Offset>>? dragOverlayNotifier;
 
   final void Function(LinkPort port, Offset globalStart) onStartPortDrag;
   final void Function(Offset globalPos) onUpdatePortDrag;
@@ -2669,6 +2686,10 @@ class AnimatedNode extends StatefulWidget {
   final bool dragEnabled;
   final bool showPortsEnabled;
 
+  /// Current zoom level from TransformationController.
+  /// Used to convert screen-space drag deltas to scene-space.
+  final double zoomScale;
+
   @override
   State<AnimatedNode> createState() => _AnimatedNodeState();
 }
@@ -2676,19 +2697,77 @@ class AnimatedNode extends StatefulWidget {
 class _AnimatedNodeState extends State<AnimatedNode> {
   Offset? _hoverLocal;
 
+  // Per-node position notifier: only the Positioned widget listens to this,
+  // so moving a node costs zero rebuilds of its children or siblings.
+  late final ValueNotifier<Offset> _posNotifier =
+      ValueNotifier(widget.topLeft);
+
+  // Accumulated scene-space delta for the current gesture.
+  Offset _localDrag = Offset.zero;
+
+  @override
+  void didUpdateWidget(AnimatedNode old) {
+    super.didUpdateWidget(old);
+    // After drag commits to store, topLeft changes. Snap the notifier to
+    // the new layout position (only runs once per gesture, not per frame).
+    if (!widget.isDragging) {
+      _posNotifier.value = widget.topLeft;
+    }
+  }
+
+  @override
+  void dispose() {
+    _posNotifier.dispose();
+    super.dispose();
+  }
+
+  void _onPanStart(DragStartDetails _) {
+    _localDrag = Offset.zero;
+    widget.onDragStart();
+  }
+
+  void _onPanUpdate(DragUpdateDetails d) {
+    // DragUpdateDetails.delta is always in *screen* pixels.
+    // Divide by zoom so the node tracks the pointer 1-to-1 in scene space.
+    final zoom = widget.zoomScale;
+    final sceneDelta = zoom > 0 ? d.delta / zoom : d.delta;
+    _localDrag += sceneDelta;
+
+    // Update only the Positioned — no setState, no widget rebuild.
+    _posNotifier.value = widget.topLeft + _localDrag;
+
+    // Update shared connector notifier (mutate in place, then reassign
+    // so ValueListenableBuilder detects the change).
+    final n = widget.dragOverlayNotifier;
+    if (n != null) {
+      n.value[widget.node.id] = _posNotifier.value;
+      n.value = n.value;
+    }
+  }
+
+  void _onPanEnd(DragEndDetails _) {
+    final committed = _localDrag;
+    _localDrag = Offset.zero;
+
+    // Remove this node from the live overlay.
+    final n = widget.dragOverlayNotifier;
+    if (n != null) {
+      n.value = Map<int, Offset>.from(n.value)..remove(widget.node.id);
+    }
+
+    // Commit to store once. This triggers a parent build → didUpdateWidget
+    // which snaps _posNotifier to the final layout position.
+    widget.onDragAccumulated(committed);
+    widget.onDragEnd();
+  }
+
   @override
   Widget build(BuildContext context) {
     final lifted = widget.isHovered || widget.isSelected || widget.isDragging;
 
-    return AnimatedPositioned(
-      // Real-time dragging: zero duration while dragging for instant visual feedback
-      // Smooth animation when released so layout changes feel polished
-      duration: widget.isDragging ? Duration.zero : const Duration(milliseconds: 340),
-      curve: widget.isDragging ? Curves.linear : Curves.easeOutQuart,
-      left: widget.topLeft.dx,
-      top: widget.topLeft.dy,
-      width: widget.size.width,
-      height: widget.size.height,
+    return ValueListenableBuilder<Offset>(
+      valueListenable: _posNotifier,
+      // `child` is built once and reused — MemberCard never rebuilds during drag.
       child: MouseRegion(
         onEnter: (_) => widget.onHoverChanged(true),
         onExit: (_) {
@@ -2718,9 +2797,9 @@ class _AnimatedNodeState extends State<AnimatedNode> {
                 widget.node.id,
                 details.globalPosition,
               ),
-              onPanStart: widget.dragEnabled ? (_) => widget.onDragStart() : null,
-              onPanUpdate: widget.dragEnabled ? (d) => widget.onDragDelta(d.delta) : null,
-              onPanEnd: widget.dragEnabled ? (_) => widget.onDragEnd() : null,
+              onPanStart: widget.dragEnabled ? _onPanStart : null,
+              onPanUpdate: widget.dragEnabled ? _onPanUpdate : null,
+              onPanEnd:   widget.dragEnabled ? _onPanEnd   : null,
               child: MemberCard(
                 node: widget.node,
                 showPorts: widget.isHovered && widget.showPortsEnabled,
@@ -2735,6 +2814,13 @@ class _AnimatedNodeState extends State<AnimatedNode> {
             ),
           ),
         ),
+      ),
+      builder: (_, pos, child) => Positioned(
+        left: pos.dx,
+        top: pos.dy,
+        width: widget.size.width,
+        height: widget.size.height,
+        child: child!,
       ),
     );
   }
@@ -3022,6 +3108,51 @@ class LinkPreviewPainter extends CustomPainter {
   @override
   bool shouldRepaint(covariant LinkPreviewPainter oldDelegate) {
     return oldDelegate.start != start || oldDelegate.end != end;
+  }
+}
+
+// ─── Live connector overlay ───────────────────────────────────────────────────
+//
+// Listens to [dragOverlayNotifier] and repaints only the connector lines that
+// need to move during a drag — without touching any node widgets or running
+// FamilyTreeLayout.compute().
+//
+class _LiveConnectorOverlay extends StatelessWidget {
+  const _LiveConnectorOverlay({
+    required this.store,
+    required this.basePositions,
+    required this.dragOverlayNotifier,
+    required this.cardSize,
+    required this.canvasSize,
+  });
+
+  final FamilyTreeStore store;
+  final Map<int, Offset> basePositions;
+  final ValueNotifier<Map<int, Offset>> dragOverlayNotifier;
+  final Size cardSize;
+  final Size canvasSize;
+
+  @override
+  Widget build(BuildContext context) {
+    return ValueListenableBuilder<Map<int, Offset>>(
+      valueListenable: dragOverlayNotifier,
+      builder: (_, livePositions, __) {
+        // Always render: when nothing is dragging, livePositions is empty and
+        // merged == basePositions. When dragging, live positions override the
+        // stale base positions so no ghost line appears.
+        final merged = livePositions.isEmpty
+            ? basePositions
+            : {...basePositions, ...livePositions};
+        return CustomPaint(
+          size: canvasSize,
+          painter: ConnectorPainter(
+            store: store,
+            positions: merged,
+            cardSize: cardSize,
+          ),
+        );
+      },
+    );
   }
 }
 
