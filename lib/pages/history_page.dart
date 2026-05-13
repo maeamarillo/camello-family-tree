@@ -282,14 +282,7 @@ class _FamilyHistoryPageState extends State<FamilyHistoryPage> {
             ),
           ),
         ),
-        title: Text(
-          widget.familyName,
-          style: const TextStyle(
-            color: Colors.white,
-            fontSize: 16,
-            fontWeight: FontWeight.w700,
-          ),
-        ),
+       
         titlePadding: const EdgeInsets.only(left: 56, bottom: 16),
         collapseMode: CollapseMode.pin,
       ),
