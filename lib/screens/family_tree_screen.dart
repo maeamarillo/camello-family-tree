@@ -3,7 +3,6 @@ import 'dart:async';
 import 'dart:math';
 import 'dart:ui' as ui;
 
-import 'package:app/pages/history_page.dart';
 import 'package:app/screens/auth/auth_service.dart';
 import 'package:app/screens/auth/desktop_body.dart';
 import 'package:app/services/cloudinary_service.dart';
@@ -751,18 +750,6 @@ class _FamilyTreeScreenState extends State<FamilyTreeScreen> {
         await _addSpouseFlow(personId: nodeId);
         break;
     }
-  }
-
-  void _openFamilyHistoryPage() {
-    Navigator.of(context).push(
-      MaterialPageRoute<void>(
-        builder: (_) => const FamilyHistoryPage(
-          
-          // familyName: 'The Camello Family',
-          // photos: [ FamilyPhoto(imageProvider: NetworkImage('...'), caption: '...', year: '1985') ],
-        ),
-      ),
-    );
   }
 
   Future<void> _logout() async {
@@ -2066,16 +2053,6 @@ Future<void> _uploadPhotoBackground(int nodeId, Uint8List bytes) async {
                                   _previewMode = !_previewMode;
                                 });
                               },
-                            ),
-                            IconButton(
-                              tooltip: 'History',
-                              icon: const Icon(Icons.history_edu, size: 18),
-                              constraints: const BoxConstraints(
-                                minWidth: 40,
-                                minHeight: 40,
-                              ),
-                              padding: const EdgeInsets.all(8),
-                              onPressed: _openFamilyHistoryPage,
                             ),
                             IconButton(
                               tooltip: 'Log out',
