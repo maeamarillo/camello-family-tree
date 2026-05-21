@@ -215,7 +215,7 @@ class _FamilyTreeScreenState extends State<FamilyTreeScreen> {
 
     _authSub = FirebaseAuth.instance.authStateChanges().listen((user) async {
       if (!mounted) return;
-      if (user == null) return;
+      // Load for both authenticated and unauthenticated users.
       await _ensureLoadedFromCloud();
     });
 
@@ -395,23 +395,18 @@ class _FamilyTreeScreenState extends State<FamilyTreeScreen> {
 
   Future<void> _ensureLoadedFromCloud() async {
     if (_loadedOnce) return;
-    final user = FirebaseAuth.instance.currentUser;
-    if (user == null) return;
 
-    setState(() => _isLoading = true);
+    if (mounted) setState(() => _isLoading = true);
 
-    _loadedOnce = true;
     try {
       await store.loadFromCloud(treeId: 'default');
+      _loadedOnce = true; // only mark done on success
       debugPrint('✅ RTDB loaded. nodes=${store.nodes.length}');
     } catch (e) {
       debugPrint('❌ loadFromCloud error: $e');
-      _loadedOnce = false;
     }
 
-    if (mounted) {
-      setState(() => _isLoading = false);
-    }
+    if (mounted) setState(() => _isLoading = false);
   }
 
   Widget buildClickableRelation({

@@ -73,7 +73,11 @@ class FamilyTreeRtdb {
   }
 
   Future<Map<dynamic, dynamic>?> loadTree(String treeId) async {
-    await ensureMember(treeId);
+    // Only register membership when signed in.
+    // Unauthenticated visitors can still read if Firebase rules allow it.
+    if (FirebaseAuth.instance.currentUser != null) {
+      await ensureMember(treeId);
+    }
 
     final snap = await treeRef(treeId).get();
     if (!snap.exists) return null;

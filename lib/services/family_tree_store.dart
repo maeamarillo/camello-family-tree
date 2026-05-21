@@ -160,6 +160,7 @@ class FamilyTreeStore extends ChangeNotifier {
     } catch (e, st) {
       debugPrint('❌ RTDB load failed: $e');
       debugPrint('$st');
+      rethrow; // let the caller know so _loadedOnce stays false
     } finally {
       _loadingFromCloud = false;
       _dirtySinceLastSave = false;

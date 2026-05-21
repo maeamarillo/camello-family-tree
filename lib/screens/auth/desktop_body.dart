@@ -1,44 +1,16 @@
+// lib/screens/auth/desktop_body.dart
+//
+// Auth screens: preloader → login → register.
+// Plain screens only — no nested MaterialApp.
+// All route strings come from AppRoutes in auth_gate.dart.
+//
+import 'package:app/screens/auth/auth_gate.dart';
 import 'package:app/screens/auth/auth_service.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 
-class DesktopBody extends StatelessWidget {
-  const DesktopBody({super.key});
-
-  @override
-  Widget build(BuildContext context) {
-    return MaterialApp(
-      debugShowCheckedModeBanner: false,
-      title: "Camello Family",
-      theme: ThemeData(
-        primarySwatch: Colors.green,
-        fontFamily: 'Inter',
-        inputDecorationTheme: InputDecorationTheme(
-          filled: true,
-          fillColor: Colors.grey.shade200,
-          border: OutlineInputBorder(
-            borderRadius: BorderRadius.circular(10),
-            borderSide: BorderSide.none,
-          ),
-          focusedBorder: OutlineInputBorder(
-            borderRadius: BorderRadius.circular(10),
-            borderSide: BorderSide.none,
-          ),
-        ),
-      ),
-      // Start with the asset preloader instead of login
-      initialRoute: AssetPreloadPage.route,
-      routes: {
-        AssetPreloadPage.route: (_) => const AssetPreloadPage(),
-        LoginPage.route: (_) => const LoginPage(),
-        RegisterPage.route: (_) => const RegisterPage(),
-      },
-    );
-  }
-}
-
 /* -------------------------------------------------------------------------- */
-/*                         ASSET PRELOADER (NEW)                              */
+/*                         ASSET PRELOADER                                    */
 /* -------------------------------------------------------------------------- */
 
 class AssetPreloadPage extends StatefulWidget {
@@ -53,7 +25,6 @@ class _AssetPreloadPageState extends State<AssetPreloadPage> {
   bool _isLoading = true;
   String? _error;
 
-  // URLs used in AuthScaffold and AppLogo
   static const _backgroundUrl =
       'https://raw.githubusercontent.com/maeamarillo/camello-family-tree/main/assets/images/camello-background.jpg';
   static const _logoUrl =
@@ -62,7 +33,6 @@ class _AssetPreloadPageState extends State<AssetPreloadPage> {
   @override
   void initState() {
     super.initState();
-    // Precache after the first frame so we have a valid BuildContext
     WidgetsBinding.instance.addPostFrameCallback((_) => _preloadAssets());
   }
 
@@ -73,12 +43,7 @@ class _AssetPreloadPageState extends State<AssetPreloadPage> {
         precacheImage(const NetworkImage(_logoUrl), context),
       ]);
       if (!mounted) return;
-      setState(() {
-        _isLoading = false;
-        _error = null;
-      });
-      // Navigate to login, replacing the preload page
-      Navigator.pushReplacementNamed(context, LoginPage.route);
+      Navigator.pushReplacementNamed(context, AppRoutes.login);
     } catch (e) {
       if (!mounted) return;
       setState(() {
@@ -90,14 +55,6 @@ class _AssetPreloadPageState extends State<AssetPreloadPage> {
 
   @override
   Widget build(BuildContext context) {
-    if (_isLoading) {
-      return const Scaffold(
-        body: Center(child: CircularProgressIndicator(
-          color: Colors.green,
-        )),
-      );
-    }
-
     if (_error != null) {
       return Scaffold(
         body: Center(
@@ -108,18 +65,12 @@ class _AssetPreloadPageState extends State<AssetPreloadPage> {
               children: [
                 const Icon(Icons.error_outline, size: 64, color: Colors.red),
                 const SizedBox(height: 16),
-                Text(
-                  _error!,
-                  textAlign: TextAlign.center,
-                  style: const TextStyle(fontSize: 16),
-                ),
+                Text(_error!, textAlign: TextAlign.center,
+                    style: const TextStyle(fontSize: 16)),
                 const SizedBox(height: 24),
                 ElevatedButton(
                   onPressed: () {
-                    setState(() {
-                      _isLoading = true;
-                      _error = null;
-                    });
+                    setState(() { _isLoading = true; _error = null; });
                     _preloadAssets();
                   },
                   child: const Text('Retry'),
@@ -131,8 +82,12 @@ class _AssetPreloadPageState extends State<AssetPreloadPage> {
       );
     }
 
-    // Should never reach here because on success we navigate away immediately
-    return const SizedBox.shrink();
+    // Loading (default) — spinner while assets download
+    return const Scaffold(
+      body: Center(
+        child: CircularProgressIndicator(color: Colors.green),
+      ),
+    );
   }
 }
 
@@ -149,34 +104,44 @@ class LoginPage extends StatefulWidget {
 }
 
 class _LoginPageState extends State<LoginPage> {
-  final email = TextEditingController();
-  final password = TextEditingController();
-  bool show = false;
+  final _email    = TextEditingController();
+  final _password = TextEditingController();
+  bool _showPassword = false;
+  bool _loading = false;
 
   @override
   void dispose() {
-    email.dispose();
-    password.dispose();
+    _email.dispose();
+    _password.dispose();
     super.dispose();
   }
 
-  Future<void> login() async {
-    final messenger = ScaffoldMessenger.of(context);
+  Future<void> _login() async {
+    if (_loading) return;
+    setState(() => _loading = true);
 
     try {
       await authService.value.signIn(
-        email: email.text,
-        password: password.text,
+        email: _email.text.trim(),
+        password: _password.text,
       );
-      // AuthGate will detect login and show DashboardPage automatically.
+      // Firebase auth stream fires → AuthGate is NOT in the stack anymore
+      // (we used pushReplacement to get here), so we navigate to /home
+      // directly here as well, for reliability.
+      if (!mounted) return;
+      Navigator.pushReplacementNamed(context, AppRoutes.home);
     } on FirebaseAuthException catch (e) {
-      messenger.showSnackBar(
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text(e.message ?? 'Login failed')),
       );
     } catch (e) {
-      messenger.showSnackBar(
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('Login failed: $e')),
       );
+    } finally {
+      if (mounted) setState(() => _loading = false);
     }
   }
 
@@ -191,7 +156,7 @@ class _LoginPageState extends State<LoginPage> {
           const SizedBox(height: 20),
           const AuthHeader(
             title: 'Log In',
-            subtitle: "Sign in to continue!",
+            subtitle: 'Sign in to continue!',
             titleStyle: TextStyle(
               fontFamily: 'Calistoga',
               fontSize: 34,
@@ -201,30 +166,33 @@ class _LoginPageState extends State<LoginPage> {
           ),
           const SizedBox(height: 30),
           AuthTextField(
-            controller: email,
-            label: 'Username',
+            controller: _email,
+            label: 'Email',
             icon: Icons.mail,
           ),
           const SizedBox(height: 15),
           AuthTextField(
-            controller: password,
+            controller: _password,
             label: 'Password',
             icon: Icons.lock,
-            obscureText: !show,
+            obscureText: !_showPassword,
             suffix: IconButton(
-              onPressed: () => setState(() => show = !show),
-              icon: Icon(show ? Icons.visibility : Icons.visibility_off),
+              onPressed: () => setState(() => _showPassword = !_showPassword),
+              icon: Icon(_showPassword ? Icons.visibility : Icons.visibility_off),
             ),
           ),
           const SizedBox(height: 25),
-          PrimaryButton(text: 'Log In', onPressed: login),
+          PrimaryButton(
+            text: _loading ? 'Signing in…' : 'Log In',
+            onPressed: _loading ? () {} : _login,
+          ),
           const SizedBox(height: 15),
           Center(
             child: LinkRow(
-              leading: "Don’t have an account? ",
-              action: "Register",
-              onTap: () =>
-                  Navigator.pushReplacementNamed(context, RegisterPage.route),
+              leading: "Don't have an account? ",
+              action: 'Register',
+              onTap: () => Navigator.pushReplacementNamed(
+                  context, AppRoutes.register),
             ),
           ),
         ],
@@ -246,36 +214,41 @@ class RegisterPage extends StatefulWidget {
 }
 
 class _RegisterPageState extends State<RegisterPage> {
-  final email = TextEditingController();
-  final password = TextEditingController();
-  bool show = false;
+  final _email    = TextEditingController();
+  final _password = TextEditingController();
+  bool _showPassword = false;
+  bool _loading = false;
 
   @override
   void dispose() {
-    email.dispose();
-    password.dispose();
+    _email.dispose();
+    _password.dispose();
     super.dispose();
   }
 
-  Future<void> register() async {
-    final messenger = ScaffoldMessenger.of(context);
+  Future<void> _register() async {
+    if (_loading) return;
+    setState(() => _loading = true);
 
     try {
       await authService.value.createAccount(
-        email: email.text,
-        password: password.text,
+        email: _email.text.trim(),
+        password: _password.text,
       );
-
       if (!mounted) return;
-      Navigator.pushReplacementNamed(context, LoginPage.route);
+      Navigator.pushReplacementNamed(context, AppRoutes.login);
     } on FirebaseAuthException catch (e) {
-      messenger.showSnackBar(
-        SnackBar(content: Text(e.message ?? 'Error Register')),
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(e.message ?? 'Register failed')),
       );
     } catch (e) {
-      messenger.showSnackBar(
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('Register failed: $e')),
       );
+    } finally {
+      if (mounted) setState(() => _loading = false);
     }
   }
 
@@ -300,30 +273,35 @@ class _RegisterPageState extends State<RegisterPage> {
           ),
           const SizedBox(height: 30),
           AuthTextField(
-            controller: email,
-            label: 'Username',
+            controller: _email,
+            label: 'Email',
             icon: Icons.mail,
           ),
           const SizedBox(height: 15),
           AuthTextField(
-            controller: password,
+            controller: _password,
             label: 'Password',
             icon: Icons.lock,
-            obscureText: !show,
+            obscureText: !_showPassword,
             suffix: IconButton(
-              onPressed: () => setState(() => show = !show),
-              icon: Icon(show ? Icons.visibility : Icons.visibility_off),
+              onPressed: () =>
+                  setState(() => _showPassword = !_showPassword),
+              icon: Icon(
+                  _showPassword ? Icons.visibility : Icons.visibility_off),
             ),
           ),
           const SizedBox(height: 25),
-          PrimaryButton(text: 'Register', onPressed: register),
+          PrimaryButton(
+            text: _loading ? 'Creating account…' : 'Register',
+            onPressed: _loading ? () {} : _register,
+          ),
           const SizedBox(height: 15),
           Center(
             child: LinkRow(
-              leading: "Already have an account? ",
-              action: "Sign in",
-              onTap: () =>
-                  Navigator.pushReplacementNamed(context, LoginPage.route),
+              leading: 'Already have an account? ',
+              action: 'Sign in',
+              onTap: () => Navigator.pushReplacementNamed(
+                  context, AppRoutes.login),
             ),
           ),
         ],
@@ -401,17 +379,13 @@ class AuthHeader extends StatelessWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text(
-          title,
-          style: titleStyle ??
-              const TextStyle(fontSize: 30, fontWeight: FontWeight.bold),
-        ),
+        Text(title,
+            style: titleStyle ??
+                const TextStyle(fontSize: 30, fontWeight: FontWeight.bold)),
         const SizedBox(height: 4),
-        Text(
-          subtitle,
-          style: subtitleStyle ??
-              TextStyle(color: Colors.grey.shade600, fontSize: 14),
-        ),
+        Text(subtitle,
+            style: subtitleStyle ??
+                TextStyle(color: Colors.grey.shade600, fontSize: 14)),
       ],
     );
   }
@@ -457,7 +431,8 @@ class AuthTextField extends StatelessWidget {
 class PrimaryButton extends StatelessWidget {
   final String text;
   final VoidCallback onPressed;
-  const PrimaryButton({super.key, required this.text, required this.onPressed});
+  const PrimaryButton(
+      {super.key, required this.text, required this.onPressed});
 
   @override
   Widget build(BuildContext context) {
@@ -472,10 +447,8 @@ class PrimaryButton extends StatelessWidget {
             borderRadius: BorderRadius.circular(10),
           ),
         ),
-        child: Text(
-          text,
-          style: const TextStyle(fontSize: 16, color: Colors.white),
-        ),
+        child: Text(text,
+            style: const TextStyle(fontSize: 16, color: Colors.white)),
       ),
     );
   }
@@ -500,10 +473,6 @@ class LinkRow extends StatelessWidget {
       crossAxisAlignment: WrapCrossAlignment.center,
       children: [
         Text(leading, style: const TextStyle(color: Colors.grey)),
-        GestureDetector(
-          onTap: onTap,
-          child: const Text(''),
-        ),
         GestureDetector(
           onTap: onTap,
           child: Text(
