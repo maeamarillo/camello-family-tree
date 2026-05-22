@@ -215,6 +215,8 @@ class _FamilyTreeScreenState extends State<FamilyTreeScreen> {
 
     _authSub = FirebaseAuth.instance.authStateChanges().listen((user) async {
       if (!mounted) return;
+      // Rebuild toolbar so auth-conditional buttons update immediately.
+      setState(() {});
       // Load for both authenticated and unauthenticated users.
       await _ensureLoadedFromCloud();
     });
@@ -725,6 +727,7 @@ class _FamilyTreeScreenState extends State<FamilyTreeScreen> {
   Future<void> _handlePortTap(int nodeId, LinkPort port) async {
     if (_isLinking) return;
     if (_previewMode) return;
+    if (!await _requireLogin()) return;
 
     if (_ctrlSelectedIds.isNotEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -891,7 +894,45 @@ Future<void> _uploadPhotoBackground(int nodeId, Uint8List bytes) async {
     }
   }
 
+  /// Returns true if the user is signed in.
+  /// If not, shows a dialog prompting them to log in and returns false.
+  Future<bool> _requireLogin() async {
+    if (FirebaseAuth.instance.currentUser != null) return true;
+    if (!mounted) return false;
+    await showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: const Text('Sign in required'),
+        content: const Text(
+          'You need to be signed in to edit the family tree.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Cancel'),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: const Color(0xFF49A04A),
+              shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(10)),
+            ),
+            onPressed: () {
+              Navigator.pop(ctx);
+              Navigator.pushReplacementNamed(context, LoginPage.route);
+            },
+            child: const Text('Log In',
+                style: TextStyle(color: Colors.white)),
+          ),
+        ],
+      ),
+    );
+    return false;
+  }
+
   Future<void> _addFirstMemberFlow() async {
+    if (!await _requireLogin()) return;
     final r = await _openMemberFormDrawer(
       title: 'Add Member Info',
       showNameField: true,
@@ -937,6 +978,7 @@ Future<void> _uploadPhotoBackground(int nodeId, Uint8List bytes) async {
   }
 
   Future<void> _addStandaloneMemberFlow() async {
+    if (!await _requireLogin()) return;
     final r = await _openMemberFormDrawer(
       title: 'Add Member Info',
       showNameField: true,
@@ -1164,6 +1206,32 @@ Future<void> _uploadPhotoBackground(int nodeId, Uint8List bytes) async {
                       ),
                     ),
                   ),
+                // Show login prompt for unauthenticated visitors
+                if (FirebaseAuth.instance.currentUser == null) ...[
+                  const Divider(height: 24),
+                  SizedBox(
+                    width: double.infinity,
+                    child: ElevatedButton.icon(
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: const Color(0xFF49A04A),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(10),
+                        ),
+                        padding: const EdgeInsets.symmetric(vertical: 12),
+                      ),
+                      icon: const Icon(Icons.lock_open, color: Colors.white, size: 18),
+                      label: const Text(
+                        'Log in to edit this member',
+                        style: TextStyle(color: Colors.white),
+                      ),
+                      onPressed: () {
+                        Navigator.pop(context);
+                        Navigator.pushReplacementNamed(
+                            context, LoginPage.route);
+                      },
+                    ),
+                  ),
+                ],
               ],
             ),
           ),
@@ -1183,7 +1251,11 @@ Future<void> _uploadPhotoBackground(int nodeId, Uint8List bytes) async {
       return;
     }
 
-    if (!store.canEditNodeId(nodeId)) {
+    // Unauthenticated visitors always see the read-only details popup
+    // (which includes a 'Log in to edit' button).
+    // Authenticated users who don't own the node also see the details popup.
+    if (FirebaseAuth.instance.currentUser == null ||
+        !store.canEditNodeId(nodeId)) {
       await _showDetailsPopup(
         nodeId: nodeId,
         globalTapPosition: globalTapPosition,
@@ -2022,43 +2094,69 @@ Future<void> _uploadPhotoBackground(int nodeId, Uint8List bytes) async {
                             const SizedBox(width: 8),
                             Container(width: 1, height: 22, color: _TreeGreenTheme.divider),
                             const SizedBox(width: 8),
-                            IconButton(
-                              tooltip: 'Add standalone member',
-                              icon: const Icon(Icons.person_add_alt_1, size: 18),
-                              constraints: const BoxConstraints(
-                                minWidth: 40,
-                                minHeight: 40,
+                            if (FirebaseAuth.instance.currentUser != null) ...[
+                              // Logged-in controls
+                              IconButton(
+                                tooltip: 'Add standalone member',
+                                icon: const Icon(Icons.person_add_alt_1, size: 18),
+                                constraints: const BoxConstraints(
+                                  minWidth: 40,
+                                  minHeight: 40,
+                                ),
+                                padding: const EdgeInsets.all(8),
+                                onPressed: _addStandaloneMemberFlow,
                               ),
-                              padding: const EdgeInsets.all(8),
-                              onPressed: _addStandaloneMemberFlow,
-                            ),
-                            IconButton(
-                              tooltip: _previewMode ? 'Exit Preview Mode' : 'Preview Mode',
-                              icon: Icon(
-                                _previewMode ? Icons.visibility_off : Icons.visibility,
-                                size: 18,
+                              IconButton(
+                                tooltip: _previewMode ? 'Exit Preview Mode' : 'Preview Mode',
+                                icon: Icon(
+                                  _previewMode ? Icons.visibility_off : Icons.visibility,
+                                  size: 18,
+                                ),
+                                constraints: const BoxConstraints(
+                                  minWidth: 40,
+                                  minHeight: 40,
+                                ),
+                                padding: const EdgeInsets.all(8),
+                                onPressed: () {
+                                  setState(() {
+                                    _previewMode = !_previewMode;
+                                  });
+                                },
                               ),
-                              constraints: const BoxConstraints(
-                                minWidth: 40,
-                                minHeight: 40,
+                              IconButton(
+                                tooltip: 'Log out',
+                                icon: const Icon(Icons.logout, size: 18),
+                                constraints: const BoxConstraints(
+                                  minWidth: 40,
+                                  minHeight: 40,
+                                ),
+                                padding: const EdgeInsets.all(8),
+                                onPressed: _logout,
                               ),
-                              padding: const EdgeInsets.all(8),
-                              onPressed: () {
-                                setState(() {
-                                  _previewMode = !_previewMode;
-                                });
-                              },
-                            ),
-                            IconButton(
-                              tooltip: 'Log out',
-                              icon: const Icon(Icons.logout, size: 18),
-                              constraints: const BoxConstraints(
-                                minWidth: 40,
-                                minHeight: 40,
+                            ] else ...[
+                              // Guest controls
+                              TextButton.icon(
+                                onPressed: () => Navigator.pushNamed(
+                                    context, RegisterPage.route),
+                                icon: const Icon(
+                                  Icons.person_add_outlined,
+                                  size: 18,
+                                  color: Colors.white,
+                                ),
+                                label: const Text(
+                                  'Register',
+                                  style: TextStyle(color: Colors.white),
+                                ),
+                                style: TextButton.styleFrom(
+                                  backgroundColor: const Color(0xFF49A04A),
+                                  shape: RoundedRectangleBorder(
+                                    borderRadius: BorderRadius.circular(8),
+                                  ),
+                                  padding: const EdgeInsets.symmetric(
+                                      horizontal: 12, vertical: 8),
+                                ),
                               ),
-                              padding: const EdgeInsets.all(8),
-                              onPressed: _logout,
-                            ),
+                            ],
                           ],
                         ),
                       ),
