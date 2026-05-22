@@ -15,9 +15,12 @@ class AppRoutes {
 
 // ── Auth guard ───────────────────────────────────────────────────────────────
 //
-// Mounted at '/'.  Listens to the Firebase auth stream exactly once and
-// navigates to the correct route.  Using a StatefulWidget + StreamSubscription
-// avoids the addPostFrameCallback-in-builder loop that caused the broken flow.
+// Mounted at '/'.
+// - Not signed in  → /home  (public, read-only view)
+// - Signed in      → /home  (full edit access)
+//
+// /login and /register are only reached when the user explicitly
+// chooses to sign in (e.g. from the "Log in to edit" prompt).
 //
 class AuthGate extends StatefulWidget {
   static const route = AppRoutes.splash;
@@ -33,8 +36,6 @@ class _AuthGateState extends State<AuthGate> {
   @override
   void initState() {
     super.initState();
-
-    // Delay navigation until after the first frame so Navigator is ready.
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _sub = authService.value.authStateChanges().listen(_onAuthChanged);
     });
@@ -42,14 +43,9 @@ class _AuthGateState extends State<AuthGate> {
 
   void _onAuthChanged(User? user) {
     if (!mounted) return;
-
-    if (user == null) {
-      // Not signed in → go through asset preloader then login
-      Navigator.pushReplacementNamed(context, AppRoutes.preload);
-    } else {
-      // Already signed in → go straight to the app
-      Navigator.pushReplacementNamed(context, AppRoutes.home);
-    }
+    // Everyone goes to /home — unauthenticated users see read-only,
+    // authenticated users get full edit access.
+    Navigator.pushReplacementNamed(context, AppRoutes.home);
   }
 
   @override

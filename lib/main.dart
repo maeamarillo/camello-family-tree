@@ -37,19 +37,19 @@ class CamelloApp extends StatelessWidget {
         ),
       ),
 
-      initialRoute: AuthGate.route,
+      initialRoute: AuthGate.route, // '/' → always lands on /home
 
       routes: {
-        // Entry point — checks auth and redirects
+        // Splash — checks auth then sends everyone to /home
         AuthGate.route:         (_) => const AuthGate(),
 
-        // Auth flow (public)
+        // Public family tree — readable by anyone
+        AppRoutes.home:         (_) => const FamilyTreeScreen(),
+
+        // Auth flow — only reached via explicit "Log in" action
         AssetPreloadPage.route: (_) => const AssetPreloadPage(),
         LoginPage.route:        (_) => const LoginPage(),
         RegisterPage.route:     (_) => const RegisterPage(),
-
-        // Public — shows the family tree regardless of auth state
-        AppRoutes.home:         (_) => const FamilyTreeScreen(),
       },
 
       onUnknownRoute: (settings) => MaterialPageRoute(
