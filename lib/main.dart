@@ -37,23 +37,19 @@ class CamelloApp extends StatelessWidget {
         ),
       ),
 
-      initialRoute: AuthGate.route, // '/' → always lands on /home
+      // /home is the default landing page for everyone.
+      // /login and /register are accessed directly — no redirect intercepts them.
+      initialRoute: AppRoutes.home,
 
       routes: {
-        // Splash — checks auth then sends everyone to /home
-        AuthGate.route:         (_) => const AuthGate(),
-
-        // Public family tree — readable by anyone
         AppRoutes.home:         (_) => const FamilyTreeScreen(),
-
-        // Auth flow — only reached via explicit "Log in" action
+        AppRoutes.login:        (_) => const LoginPage(),
+        AppRoutes.register:     (_) => const RegisterPage(),
         AssetPreloadPage.route: (_) => const AssetPreloadPage(),
-        LoginPage.route:        (_) => const LoginPage(),
-        RegisterPage.route:     (_) => const RegisterPage(),
       },
 
       onUnknownRoute: (settings) => MaterialPageRoute(
-        builder: (_) => const AuthGate(),
+        builder: (_) => const FamilyTreeScreen(),
       ),
     );
   }
