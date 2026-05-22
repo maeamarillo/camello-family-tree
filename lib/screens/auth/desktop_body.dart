@@ -110,6 +110,17 @@ class _LoginPageState extends State<LoginPage> {
   bool _loading = false;
 
   @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      if (FirebaseAuth.instance.currentUser != null) {
+        Navigator.pushReplacementNamed(context, AppRoutes.home);
+      }
+    });
+  }
+
+  @override
   void dispose() {
     _email.dispose();
     _password.dispose();
