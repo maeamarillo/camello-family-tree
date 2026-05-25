@@ -602,15 +602,9 @@ class FamilyTreeStore extends ChangeNotifier {
 
     final node = getNode(id);
 
-    for (final pid in node.parents.toList()) {
-      if (!canEditNodeId(pid)) return;
-    }
-    for (final cid in node.children.toList()) {
-      if (!canEditNodeId(cid)) return;
-    }
-    for (final sid in node.spouses.toList()) {
-      if (!canEditNodeId(sid)) return;
-    }
+    // Only ownership of the deleted node itself is required.
+    // Unlinking it from connected nodes is a shared graph operation —
+    // no ownership of parents/children/spouses is needed.
 
     for (final pid in node.parents.toList()) {
       _nodes[pid]?.children.remove(id);
@@ -836,7 +830,9 @@ class FamilyTreeStore extends ChangeNotifier {
     if (parentGender == Gender.male && maleP != null) return null;
 
     final otherParentId = parentGender == Gender.female ? maleP : femaleP;
-    if (otherParentId != null && !canEditNodeId(otherParentId)) return null;
+    // No ownership check on otherParentId — linking alongside a foreign-owned
+    // parent is a shared graph operation, not an edit of that parent node.
+
 
     final parent = createNode(
       name: name,
