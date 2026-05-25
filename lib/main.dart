@@ -1,4 +1,5 @@
 // lib/main.dart
+import 'package:app/screens/admin/admin_page.dart';
 import 'package:app/screens/auth/auth_gate.dart';
 import 'package:app/screens/auth/desktop_body.dart';
 import 'package:app/screens/family_tree_screen.dart';
@@ -45,6 +46,7 @@ class CamelloApp extends StatelessWidget {
         AppRoutes.home:         (_) => const FamilyTreeScreen(),
         AppRoutes.login:        (_) => const LoginPage(),
         AppRoutes.register:     (_) => const RegisterPage(),
+        AppRoutes.admin:        (_) => const AdminPage(),
         AssetPreloadPage.route: (_) => const AssetPreloadPage(),
       },
 

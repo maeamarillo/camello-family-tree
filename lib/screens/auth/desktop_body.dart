@@ -6,6 +6,7 @@
 //
 import 'package:app/screens/auth/auth_gate.dart';
 import 'package:app/screens/auth/auth_service.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 
@@ -214,6 +215,7 @@ class RegisterPage extends StatefulWidget {
 }
 
 class _RegisterPageState extends State<RegisterPage> {
+  final _name     = TextEditingController();
   final _email    = TextEditingController();
   final _password = TextEditingController();
   bool _showPassword = false;
@@ -221,31 +223,76 @@ class _RegisterPageState extends State<RegisterPage> {
 
   @override
   void dispose() {
+    _name.dispose();
     _email.dispose();
     _password.dispose();
     super.dispose();
   }
 
+  // Submits a pending registration request to Firestore.
+  // An admin must approve it from the Admin Panel before the user can log in.
   Future<void> _register() async {
     if (_loading) return;
+
+    final email    = _email.text.trim();
+    final password = _password.text;
+    final name     = _name.text.trim();
+
+    if (name.isEmpty || email.isEmpty || password.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Please fill in all fields.')),
+      );
+      return;
+    }
+
     setState(() => _loading = true);
 
     try {
-      await authService.value.createAccount(
-        email: _email.text.trim(),
-        password: _password.text,
+      await FirebaseFirestore.instance
+          .collection('pending_registrations')
+          .add({
+        'name'       : name,
+        'email'      : email,
+        // ⚠️  Storing the password in Firestore is a simplified approach.
+        // For production consider Firebase sendSignInLinkToEmail instead.
+        'password'   : password,
+        'status'     : 'pending',
+        'requestedAt': FieldValue.serverTimestamp(),
+      });
+
+      if (!mounted) return;
+
+      await showDialog<void>(
+        context: context,
+        barrierDismissible: false,
+        builder: (ctx) => AlertDialog(
+          shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(16)),
+          title: const Text('Request Submitted'),
+          content: const Text(
+            'Your registration request has been sent for admin approval. '
+            'You will be able to log in once it is approved.',
+          ),
+          actions: [
+            FilledButton(
+              style: FilledButton.styleFrom(
+                backgroundColor: const Color(0xFF49A04A),
+                shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(10)),
+              ),
+              onPressed: () => Navigator.pop(ctx),
+              child: const Text('OK'),
+            ),
+          ],
+        ),
       );
+
       if (!mounted) return;
       Navigator.pushReplacementNamed(context, AppRoutes.login);
-    } on FirebaseAuthException catch (e) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(e.message ?? 'Register failed')),
-      );
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Register failed: $e')),
+        SnackBar(content: Text('Request failed: $e')),
       );
     } finally {
       if (mounted) setState(() => _loading = false);
@@ -263,7 +310,7 @@ class _RegisterPageState extends State<RegisterPage> {
           const SizedBox(height: 20),
           const AuthHeader(
             title: 'Register',
-            subtitle: "Let's sign you up!",
+            subtitle: "Request an account — pending admin approval.",
             titleStyle: TextStyle(
               fontFamily: 'Calistoga',
               fontSize: 34,
@@ -272,6 +319,12 @@ class _RegisterPageState extends State<RegisterPage> {
             ),
           ),
           const SizedBox(height: 30),
+          AuthTextField(
+            controller: _name,
+            label: 'Full Name',
+            icon: Icons.person,
+          ),
+          const SizedBox(height: 15),
           AuthTextField(
             controller: _email,
             label: 'Email',
