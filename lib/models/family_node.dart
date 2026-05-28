@@ -12,6 +12,7 @@ class FamilyNode {
     required this.levelY,
     required this.slotX,
     this.ownerUid,
+    this.isDeceased = false,
     this.birthday,
     this.photoPath,
     this.photoBytes,
@@ -40,6 +41,7 @@ class FamilyNode {
   double slotX;
 
   String? ownerUid;
+  bool isDeceased;
   Offset manualOffset = Offset.zero;
   DateTime? birthday;
 
@@ -123,6 +125,7 @@ class FamilyNode {
       'xAccount': xAccount,
       'tiktok': tiktok,
       'photoUrl': photoUrl,
+      'isDeceased': isDeceased,
     };
   }
 
@@ -141,6 +144,7 @@ class FamilyNode {
       levelY: ((m['levelY'] ?? 0) as num).toInt(),
       slotX: ((m['slotX'] ?? 0) as num).toDouble(),
       ownerUid: m['ownerUid'] as String?,
+      isDeceased: (m['isDeceased'] as bool?) ?? false,
       birthday: (m['birthday'] == null)
           ? null
           : DateTime.fromMillisecondsSinceEpoch((m['birthday'] as num).toInt()),

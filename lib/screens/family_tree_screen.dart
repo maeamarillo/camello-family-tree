@@ -23,6 +23,19 @@ import '../widgets/link_ports.dart';
 import '../widgets/member_photo.dart';
 import '../widgets/plus_port.dart';
 
+/// Returns the age in whole years from [birthday] to today,
+/// or null if [birthday] is null.
+int? _calcAge(DateTime? birthday) {
+  if (birthday == null) return null;
+  final today = DateTime.now();
+  int age = today.year - birthday.year;
+  if (today.month < birthday.month ||
+      (today.month == birthday.month && today.day < birthday.day)) {
+    age--;
+  }
+  return age;
+}
+
 class FamilyTreeScreen extends StatefulWidget {
   const FamilyTreeScreen({super.key});
 
@@ -414,47 +427,106 @@ class _FamilyTreeScreenState extends State<FamilyTreeScreen> {
   Widget buildClickableRelation({
     required String label,
     required List<int> ids,
+    required ValueNotifier<Set<String>> expandedSections,
   }) {
     if (ids.isEmpty) return const SizedBox();
 
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 10),
-      child: Wrap(
-        crossAxisAlignment: WrapCrossAlignment.center,
-        spacing: 6,
-        runSpacing: 4,
-        children: [
-          Text(
-            '$label:',
-            style: const TextStyle(fontWeight: FontWeight.w600),
-          ),
-          ...ids.map((id) {
-            final n = store.getNode(id);
-            return InkWell(
-              borderRadius: BorderRadius.circular(6),
-              onTap: () {
-                Navigator.pop(context);
-                _focusNode(id);
-              },
-              child: Container(
-                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                decoration: BoxDecoration(
-                  color: _TreeGreenTheme.softSurface,
-                  borderRadius: BorderRadius.circular(6),
-                  border: Border.all(color: _TreeGreenTheme.border),
-                ),
-                child: Text(
-                  n.name,
-                  style: const TextStyle(
-                    fontSize: 13,
-                    color: _TreeGreenTheme.primary,
+    const int _previewCount = 2;
+    final bool needsToggle = ids.length > _previewCount;
+    final String sectionKey = label;
+
+    return ValueListenableBuilder<Set<String>>(
+      valueListenable: expandedSections,
+      builder: (context, expanded, _) {
+        final bool isExpanded = expanded.contains(sectionKey);
+        final visibleIds =
+            needsToggle && !isExpanded ? ids.take(_previewCount).toList() : ids;
+        final hiddenCount = ids.length - _previewCount;
+
+        return Padding(
+          padding: const EdgeInsets.only(bottom: 10),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Wrap(
+                crossAxisAlignment: WrapCrossAlignment.center,
+                spacing: 6,
+                runSpacing: 4,
+                children: [
+                  Text(
+                    '$label:',
+                    style: const TextStyle(fontWeight: FontWeight.w600),
+                  ),
+                  ...visibleIds.map((id) {
+                    final n = store.getNode(id);
+                    return InkWell(
+                      borderRadius: BorderRadius.circular(6),
+                      onTap: () {
+                        Navigator.pop(context);
+                        _focusNode(id);
+                      },
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 8, vertical: 4),
+                        decoration: BoxDecoration(
+                          color: _TreeGreenTheme.softSurface,
+                          borderRadius: BorderRadius.circular(6),
+                          border: Border.all(color: _TreeGreenTheme.border),
+                        ),
+                        child: Text(
+                          n.name,
+                          style: const TextStyle(
+                            fontSize: 13,
+                            color: _TreeGreenTheme.primary,
+                          ),
+                        ),
+                      ),
+                    );
+                  }),
+                ],
+              ),
+              if (needsToggle)
+                GestureDetector(
+                  onTap: () {
+                    final next = Set<String>.from(expanded);
+                    if (isExpanded) {
+                      next.remove(sectionKey);
+                    } else {
+                      next.add(sectionKey);
+                    }
+                    expandedSections.value = next;
+                  },
+                  child: Padding(
+                    padding: const EdgeInsets.only(top: 4),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(
+                          isExpanded
+                              ? Icons.expand_less
+                              : Icons.expand_more,
+                          size: 16,
+                          color: _TreeGreenTheme.primary,
+                        ),
+                        const SizedBox(width: 2),
+                        Text(
+                          isExpanded
+                              ? 'Show less'
+                              : '+$hiddenCount more',
+                          style: const TextStyle(
+                            fontSize: 12,
+                            color: _TreeGreenTheme.primary,
+                            fontWeight: FontWeight.w500,
+                          ),
+                        ),
+                      ],
+                    ),
                   ),
                 ),
-              ),
-            );
-          }),
-        ],
-      ),
+            ],
+          ),
+        );
+      },
     );
   }
 
@@ -1064,6 +1136,10 @@ Future<void> _showDetailsPopup({
   // Always‑visible info (birthday + address)
   final basicInfoLines = <String>[
     if (node.birthday != null) 'Birthday: ${formatDate(node.birthday!)}',
+    if (node.birthday != null)
+      node.isDeceased
+          ? 'Age: Died at ${_calcAge(node.birthday)}'
+          : 'Age: ${_calcAge(node.birthday)}',
     ...[
       line('Barangay', node.barangay),
       line('City/Town', node.city),
@@ -1091,6 +1167,7 @@ Future<void> _showDetailsPopup({
   );
 
   final showAllNotifier = ValueNotifier<bool>(false);
+  final expandedSectionsNotifier = ValueNotifier<Set<String>>({});
 
   await showMenu<String>(
     context: context,
@@ -1106,7 +1183,10 @@ Future<void> _showDetailsPopup({
         child: ValueListenableBuilder<bool>(
           valueListenable: showAllNotifier,
           builder: (context, showAllDetails, _) {
-            return Container(
+            return ValueListenableBuilder<Set<String>>(
+              valueListenable: expandedSectionsNotifier,
+              builder: (context, _, __) {
+              return Container(
               width: 320,
               padding: const EdgeInsets.all(16),
               decoration: BoxDecoration(
@@ -1187,11 +1267,11 @@ Future<void> _showDetailsPopup({
 
                   // Family relations (always visible)
                   if (parentIds.isNotEmpty)
-                    buildClickableRelation(label: 'Parents', ids: parentIds),
+                    buildClickableRelation(label: 'Parents', ids: parentIds, expandedSections: expandedSectionsNotifier),
                   if (siblingIds.isNotEmpty)
-                    buildClickableRelation(label: 'Siblings', ids: siblingIds),
+                    buildClickableRelation(label: 'Siblings', ids: siblingIds, expandedSections: expandedSectionsNotifier),
                   if (childrenIds.isNotEmpty)
-                    buildClickableRelation(label: 'Children', ids: childrenIds),
+                    buildClickableRelation(label: 'Children', ids: childrenIds, expandedSections: expandedSectionsNotifier),
                   if (parentIds.isNotEmpty ||
                       siblingIds.isNotEmpty ||
                       childrenIds.isNotEmpty)
@@ -1278,6 +1358,8 @@ Future<void> _showDetailsPopup({
                 ],
               ),
             );
+            },
+          );
           },
         ),
       ),
@@ -1452,6 +1534,16 @@ Future<void> _showDetailsPopup({
                       onTap: () => Navigator.pop(context, 'daughter'),
                     ),
                     _PopupActionButton(
+                      icon: node.isDeceased
+                          ? Icons.favorite_outlined
+                          : Icons.sentiment_very_dissatisfied_outlined,
+                      label: node.isDeceased ? 'Living' : 'Deceased',
+                      color: node.isDeceased
+                          ? _TreeGreenTheme.actionTeal
+                          : const Color(0xFF7A7A8C),
+                      onTap: () => Navigator.pop(context, 'deceased'),
+                    ),
+                    _PopupActionButton(
                       icon: Icons.delete,
                       label: 'Delete',
                       color: Colors.red,
@@ -1483,6 +1575,9 @@ Future<void> _showDetailsPopup({
         break;
       case 'daughter':
         await _addDaughterFlow(fromNodeId: nodeId);
+        break;
+      case 'deceased':
+        setState(() => store.toggleDeceased(nodeId));
         break;
       case 'delete':
         final ok = await showDialog<bool>(
@@ -3080,10 +3175,27 @@ class MemberCard extends StatelessWidget {
         elevation: 2,
         shadowColor: _TreeGreenTheme.shadow,
         borderRadius: BorderRadius.circular(16),
-        color: _TreeGreenTheme.surface,
+        color: node.isDeceased ? const Color(0xFFEEEEEE) : _TreeGreenTheme.surface,
         child: Stack(
           clipBehavior: Clip.none,
           children: [
+            // Deceased cross badge — top-right corner
+            if (node.isDeceased)
+              Positioned(
+                top: 6,
+                right: 8,
+                child: Tooltip(
+                  message: 'Deceased',
+                  child: Text(
+                    '✝',
+                    style: TextStyle(
+                      fontSize: 13,
+                      color: Colors.grey.shade500,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                ),
+              ),
             InkWell(
               borderRadius: BorderRadius.circular(16),
               child: Padding(
@@ -3102,9 +3214,12 @@ class MemberCard extends StatelessWidget {
                             maxLines: 2,
                             softWrap: true,
                             overflow: TextOverflow.visible,
-                            style: const TextStyle(
+                            style: TextStyle(
                               fontWeight: FontWeight.w700,
                               height: 1.15,
+                              color: node.isDeceased
+                                  ? Colors.grey.shade500
+                                  : null,
                             ),
                           ),
                           const SizedBox(height: 4),
@@ -3114,14 +3229,16 @@ class MemberCard extends StatelessWidget {
                               crossAxisAlignment: CrossAxisAlignment.center,
                               children: [
                                 Icon(
-                                  Icons.cake,
+                                  node.isDeceased ? Icons.favorite_outlined : Icons.cake,
                                   size: 14,
                                   color: _TreeGreenTheme.textMuted,
                                 ),
                                 const SizedBox(width: 4),
                                 Expanded(
                                   child: Text(
-                                    formatDate(node.birthday!),
+                                    node.isDeceased
+                                        ? 'Died at age ${_calcAge(node.birthday)}'
+                                        : formatDate(node.birthday!),
                                     maxLines: 1,
                                     overflow: TextOverflow.ellipsis,
                                     style: TextStyle(
@@ -3212,8 +3329,21 @@ class _PopupActionButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final bg = enabled ? color.withAlpha(31) : _TreeGreenTheme.softSurface;
-    final fg = enabled ? color : _TreeGreenTheme.textMuted;
+    // Determine if this is the delete button
+    final isDelete = color == Colors.red;
+    
+    // Use green theme for enabled buttons (except delete stays red), gray for disabled
+    final buttonColor = enabled 
+        ? (isDelete ? Colors.red : _TreeGreenTheme.primary)
+        : const Color(0xFFB0B0B0); // Gray color for disabled
+    
+    final bg = enabled 
+        ? buttonColor.withAlpha(31) 
+        : const Color(0xFFE8E8E8); // Lighter gray background for disabled
+    
+    final fg = enabled 
+        ? buttonColor 
+        : const Color(0xFF808080); // Darker gray text for disabled
 
     return InkWell(
       onTap: enabled ? onTap : null,
@@ -3225,7 +3355,7 @@ class _PopupActionButton extends StatelessWidget {
           color: bg,
           borderRadius: BorderRadius.circular(16),
           border: Border.all(
-            color: enabled ? color.withAlpha(51) : _TreeGreenTheme.border,
+            color: enabled ? buttonColor.withAlpha(51) : const Color(0xFFD0D0D0),
           ),
         ),
         child: Row(

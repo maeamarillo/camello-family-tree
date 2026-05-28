@@ -339,6 +339,14 @@ class FamilyTreeStore extends ChangeNotifier {
     scheduleSaveToCloud();
   }
 
+  void toggleDeceased(int id) {
+    if (!_nodes.containsKey(id)) return;
+    if (!canEditNodeId(id)) return;
+    getNode(id).isDeceased = !getNode(id).isDeceased;
+    notifyListeners();
+    scheduleSaveToCloud();
+  }
+
   void linkParentChild({
     required int parentId,
     required int childId,
