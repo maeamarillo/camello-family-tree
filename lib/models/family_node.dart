@@ -16,7 +16,9 @@ class FamilyNode {
     this.photoPath,
     this.photoBytes,
     this.photoUrl,
-    this.address,
+    this.barangay,
+    this.city,
+    this.province,
     this.phone,
     this.company,
     this.jobTitle,
@@ -45,7 +47,9 @@ class FamilyNode {
   Uint8List? photoBytes;
   String? photoUrl;
 
-  String? address;
+  String? barangay;
+  String? city;
+  String? province;
   String? phone;
   String? company;
   String? jobTitle;
@@ -63,7 +67,9 @@ class FamilyNode {
 
   bool get hasAnyDetails {
     bool has(String? s) => s != null && s.trim().isNotEmpty;
-    return has(address) ||
+    return has(barangay) ||
+    has(city) ||
+    has(province) ||
         has(phone) ||
         has(company) ||
         has(jobTitle) ||
@@ -106,7 +112,9 @@ class FamilyNode {
       'parents': parents.toList(),
       'children': children.toList(),
       'spouses': spouses.toList(),
-      'address': address,
+      'barangay': barangay,
+      'city': city,
+      'province': province,
       'phone': phone,
       'company': company,
       'jobTitle': jobTitle,
@@ -155,7 +163,9 @@ class FamilyNode {
       ((m['spouses'] as List?) ?? const []).map((e) => (e as num).toInt()),
     );
 
-    node.address = m['address'] as String?;
+    node.barangay = m['barangay'] as String?;
+    node.city = m['city'] as String?;
+    node.province = m['province'] as String?;
     node.phone = m['phone'] as String?;
     node.company = m['company'] as String?;
     node.jobTitle = m['jobTitle'] as String?;

@@ -832,7 +832,9 @@ Future<void> _uploadPhotoBackground(int nodeId, Uint8List bytes) async {
   Future<void> _editDetailsFlow(int nodeId) async {
     final n = store.getNode(nodeId);
     final initial = MemberDetails(
-      address: n.address,
+      barangay: n.barangay,
+      city: n.city,
+      province: n.province,
       phone: n.phone,
       company: n.company,
       jobTitle: n.jobTitle,
@@ -965,7 +967,9 @@ Future<void> _uploadPhotoBackground(int nodeId, Uint8List bytes) async {
       birthday: r.clearBirthday ? null : r.birthday,
       photoUrl: photoUrl,
       photoBytes: null,
-      address: r.details.address,
+      barangay: r.details.barangay,
+      city: r.details.city,
+      province: r.details.province,
       phone: r.details.phone,
       company: r.details.company,
       jobTitle: r.details.jobTitle,
@@ -1011,7 +1015,9 @@ Future<void> _uploadPhotoBackground(int nodeId, Uint8List bytes) async {
       birthday: r.clearBirthday ? null : r.birthday,
       photoUrl: photoUrl,
       photoBytes: null,
-      address: r.details.address,
+      barangay: r.details.barangay,
+      city: r.details.city,
+      province: r.details.province,  
       phone: r.details.phone,
       company: r.details.company,
       jobTitle: r.details.jobTitle,
@@ -1033,213 +1039,251 @@ Future<void> _uploadPhotoBackground(int nodeId, Uint8List bytes) async {
     });
   }
 
-  Future<void> _showDetailsPopup({
-    required int nodeId,
-    required Offset globalTapPosition,
-  }) async {
-    final node = store.getNode(nodeId);
+Future<void> _showDetailsPopup({
+  required int nodeId,
+  required Offset globalTapPosition,
+}) async {
+  final node = store.getNode(nodeId);
 
-    final parentIds = node.parents.toList();
-    final childrenIds = node.children.toList();
+  final parentIds = node.parents.toList();
+  final childrenIds = node.children.toList();
 
-    final siblingIds = store.nodes.values
-        .where((n) =>
-            n.id != node.id &&
-            n.parents.any((p) => node.parents.contains(p)))
-        .map((n) => n.id)
-        .toList();
+  final siblingIds = store.nodes.values
+      .where((n) =>
+          n.id != node.id &&
+          n.parents.any((p) => node.parents.contains(p)))
+      .map((n) => n.id)
+      .toList();
 
-    String? line(String label, String? value) {
-      final v = (value ?? '').trim();
-      if (v.isEmpty) return null;
-      return '$label: $v';
-    }
+  String? line(String label, String? value) {
+    final v = (value ?? '').trim();
+    if (v.isEmpty) return null;
+    return '$label: $v';
+  }
 
-    final infoLines = <String>[
-      if (node.birthday != null) 'Birthday: ${formatDate(node.birthday!)}',
-      ...[
-        line('Address', node.address),
-        line('Phone', node.phone),
-        line('Company', node.company),
-        line('Job Title', node.jobTitle),
-        line('Facebook', node.fb),
-        line('Instagram', node.ig),
-        line('X', node.xAccount),
-        line('TikTok', node.tiktok),
-      ].whereType<String>(),
-    ];
+  // Always‑visible info (birthday + address)
+  final basicInfoLines = <String>[
+    if (node.birthday != null) 'Birthday: ${formatDate(node.birthday!)}',
+    ...[
+      line('Barangay', node.barangay),
+      line('City/Town', node.city),
+      line('Province', node.province),
+    ].whereType<String>(),
+  ];
 
-    final overlay = Overlay.of(context).context.findRenderObject() as RenderBox;
+  // Extra info (phone, work, social)
+  final extraInfoLines = <String>[
+    ...[
+      line('Phone', node.phone),
+      line('Company', node.company),
+      line('Job Title', node.jobTitle),
+      line('Facebook', node.fb),
+      line('Instagram', node.ig),
+      line('X', node.xAccount),
+      line('TikTok', node.tiktok),
+    ].whereType<String>(),
+  ];
 
-    final position = RelativeRect.fromRect(
-      Rect.fromLTWH(globalTapPosition.dx, globalTapPosition.dy, 1, 1),
-      Offset.zero & overlay.size,
-    );
+  final overlay = Overlay.of(context).context.findRenderObject() as RenderBox;
+  final position = RelativeRect.fromRect(
+    Rect.fromLTWH(globalTapPosition.dx, globalTapPosition.dy, 1, 1),
+    Offset.zero & overlay.size,
+  );
 
-    await showMenu<String>(
-      context: context,
-      position: position,
-      color: Colors.transparent,
-      elevation: 0,
-      constraints: const BoxConstraints(minWidth: 300, maxWidth: 340),
-      items: [
-        PopupMenuItem<String>(
-          value: '__details__',
-          enabled: false,
-          padding: EdgeInsets.zero,
-          child: Container(
-            width: 320,
-            padding: const EdgeInsets.all(16),
-            decoration: BoxDecoration(
-              color: _TreeGreenTheme.surface,
-              borderRadius: BorderRadius.circular(24),
-              border: Border.all(color: _TreeGreenTheme.border),
-              boxShadow: [
-                BoxShadow(
-                  color: _TreeGreenTheme.shadow,
-                  blurRadius: 18,
-                  offset: const Offset(0, 8),
-                ),
-              ],
-            ),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
-                  children: [
-                    GestureDetector(
-                      onTap: node.hasPhoto
-                          ? () => _viewPhotoFullScreen(node)
-                          : null,
-                      child: Container(
-                        width: 52,
-                        height: 52,
-                        decoration: BoxDecoration(
-                          shape: BoxShape.circle,
-                          color: !node.hasPhoto ? node.gender.tone : null,
-                          border: Border.all(color: _TreeGreenTheme.border),
-                        ),
-                        child: !node.hasPhoto
-                            ? Icon(node.gender.icon,
-                                size: 26, color: _TreeGreenTheme.textMuted)
-                            : ClipOval(
-                                child: Image(
-                                  image: node.photoProvider,
-                                  fit: BoxFit.cover,
+  final showAllNotifier = ValueNotifier<bool>(false);
+
+  await showMenu<String>(
+    context: context,
+    position: position,
+    color: Colors.transparent,
+    elevation: 0,
+    constraints: const BoxConstraints(minWidth: 300, maxWidth: 340),
+    items: [
+      PopupMenuItem<String>(
+        value: '__details__',
+        enabled: false,
+        padding: EdgeInsets.zero,
+        child: ValueListenableBuilder<bool>(
+          valueListenable: showAllNotifier,
+          builder: (context, showAllDetails, _) {
+            return Container(
+              width: 320,
+              padding: const EdgeInsets.all(16),
+              decoration: BoxDecoration(
+                color: _TreeGreenTheme.surface,
+                borderRadius: BorderRadius.circular(24),
+                border: Border.all(color: _TreeGreenTheme.border),
+                boxShadow: [
+                  BoxShadow(
+                    color: _TreeGreenTheme.shadow,
+                    blurRadius: 18,
+                    offset: const Offset(0, 8),
+                  ),
+                ],
+              ),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  // Header (photo, name, gender)
+                  Row(
+                    children: [
+                      GestureDetector(
+                        onTap: node.hasPhoto
+                            ? () => _viewPhotoFullScreen(node)
+                            : null,
+                        child: Container(
+                          width: 52,
+                          height: 52,
+                          decoration: BoxDecoration(
+                            shape: BoxShape.circle,
+                            color: !node.hasPhoto ? node.gender.tone : null,
+                            border: Border.all(color: _TreeGreenTheme.border),
+                          ),
+                          child: !node.hasPhoto
+                              ? Icon(node.gender.icon,
+                                  size: 26, color: _TreeGreenTheme.textMuted)
+                              : ClipOval(
+                                  child: Image(
+                                    image: node.photoProvider,
+                                    fit: BoxFit.cover,
+                                  ),
                                 ),
-                              ),
+                        ),
                       ),
-                    ),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: Column(
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              node.name,
+                              style: const TextStyle(
+                                fontSize: 18,
+                                fontWeight: FontWeight.w700,
+                              ),
+                            ),
+                            const SizedBox(height: 4),
+                            Row(
+                              children: [
+                                Icon(node.gender.icon,
+                                    size: 14, color: _TreeGreenTheme.textMuted),
+                                const SizedBox(width: 4),
+                                Text(
+                                  node.gender.label,
+                                  style: const TextStyle(
+                                    fontSize: 12,
+                                    color: _TreeGreenTheme.textMuted,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 14),
+
+                  // Family relations (always visible)
+                  if (parentIds.isNotEmpty)
+                    buildClickableRelation(label: 'Parents', ids: parentIds),
+                  if (siblingIds.isNotEmpty)
+                    buildClickableRelation(label: 'Siblings', ids: siblingIds),
+                  if (childrenIds.isNotEmpty)
+                    buildClickableRelation(label: 'Children', ids: childrenIds),
+                  if (parentIds.isNotEmpty ||
+                      siblingIds.isNotEmpty ||
+                      childrenIds.isNotEmpty)
+                    const SizedBox(height: 6),
+
+                  // Basic details (birthday, address)
+                  if (basicInfoLines.isNotEmpty) ...[
+                    for (final line in basicInfoLines)
+                      Padding(
+                        padding: const EdgeInsets.only(bottom: 8),
+                        child: Text(line, style: const TextStyle(fontSize: 14)),
+                      ),
+                  ],
+
+                  // Extra details section: details then button (or just button)
+                  if (extraInfoLines.isNotEmpty) ...[
+                    if (showAllDetails)
+                      Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          Text(
-                            node.name,
-                            style: const TextStyle(
-                              fontSize: 18,
-                              fontWeight: FontWeight.w700,
+                          for (final line in extraInfoLines)
+                            Padding(
+                              padding: const EdgeInsets.only(bottom: 8),
+                              child: Text(line,
+                                  style: const TextStyle(fontSize: 14)),
                             ),
-                          ),
-                          const SizedBox(height: 4),
-                          Row(
-                            children: [
-                              Icon(node.gender.icon,
-                                  size: 14, color: _TreeGreenTheme.textMuted),
-                              const SizedBox(width: 4),
-                              Text(
-                                node.gender.label,
-                                style: const TextStyle(
-                                  fontSize: 12,
-                                  color: _TreeGreenTheme.textMuted,
-                                ),
-                              ),
-                            ],
-                          ),
+                          const SizedBox(height: 8),
                         ],
+                      ),
+                    Center(
+                      child: TextButton.icon(
+                        onPressed: () =>
+                            showAllNotifier.value = !showAllDetails,
+                        icon: Icon(showAllDetails
+                            ? Icons.expand_less
+                            : Icons.expand_more),
+                        label: Text(showAllDetails
+                            ? 'Show less'
+                            : 'Show all details'),
+                        style: TextButton.styleFrom(
+                          foregroundColor: _TreeGreenTheme.primary,
+                        ),
                       ),
                     ),
                   ],
-                ),
 
-                const SizedBox(height: 14),
-
-                if (parentIds.isNotEmpty)
-                  buildClickableRelation(label: 'Parents', ids: parentIds),
-
-                if (siblingIds.isNotEmpty)
-                  buildClickableRelation(label: 'Siblings', ids: siblingIds),
-
-                if (childrenIds.isNotEmpty)
-                  buildClickableRelation(label: 'Children', ids: childrenIds),
-
-                if (parentIds.isNotEmpty ||
-                    siblingIds.isNotEmpty ||
-                    childrenIds.isNotEmpty)
-                  const SizedBox(height: 6),
-
-                if (infoLines.isEmpty)
-                  const Text(
-                    'No additional details provided.',
-                    style: TextStyle(color: _TreeGreenTheme.textMuted),
-                  )
-                else
-                  ConstrainedBox(
-                    constraints: BoxConstraints(
-                      maxHeight: MediaQuery.of(context).size.height * 0.4,
-                    ),
-                    child: SingleChildScrollView(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          for (final t in infoLines)
-                            Padding(
-                              padding: const EdgeInsets.only(bottom: 10),
-                              child: Text(
-                                t,
-                                style: const TextStyle(fontSize: 14),
-                              ),
-                            ),
-                        ],
+                  // Fallback when no details at all
+                  if (basicInfoLines.isEmpty && extraInfoLines.isEmpty)
+                    const Padding(
+                      padding: EdgeInsets.symmetric(vertical: 8),
+                      child: Text(
+                        'No additional details provided.',
+                        style: TextStyle(color: _TreeGreenTheme.textMuted),
                       ),
                     ),
-                  ),
-                // Show login prompt for unauthenticated visitors
-                if (FirebaseAuth.instance.currentUser == null) ...[
-                  const Divider(height: 24),
-                  SizedBox(
-                    width: double.infinity,
-                    child: ElevatedButton.icon(
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: const Color(0xFF49A04A),
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(10),
+
+                  // Log in prompt for guests (always at the bottom)
+                  if (FirebaseAuth.instance.currentUser == null) ...[
+                    const Divider(height: 24),
+                    SizedBox(
+                      width: double.infinity,
+                      child: ElevatedButton.icon(
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: const Color(0xFF49A04A),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(10),
+                          ),
+                          padding: const EdgeInsets.symmetric(vertical: 12),
                         ),
-                        padding: const EdgeInsets.symmetric(vertical: 12),
+                        icon: const Icon(Icons.lock_open,
+                            color: Colors.white, size: 18),
+                        label: const Text(
+                          'Log in to edit this member',
+                          style: TextStyle(color: Colors.white),
+                        ),
+                        onPressed: () {
+                          Navigator.pop(context);
+                          Navigator.pushReplacementNamed(
+                              context, LoginPage.route);
+                        },
                       ),
-                      icon: const Icon(Icons.lock_open, color: Colors.white, size: 18),
-                      label: const Text(
-                        'Log in to edit this member',
-                        style: TextStyle(color: Colors.white),
-                      ),
-                      onPressed: () {
-                        Navigator.pop(context);
-                        Navigator.pushReplacementNamed(
-                            context, LoginPage.route);
-                      },
                     ),
-                  ),
+                  ],
                 ],
-              ],
-            ),
-          ),
+              ),
+            );
+          },
         ),
-      ],
-    );
-  }
-
+      ),
+    ],
+  );
+}
   Future<void> _openNodeActions({
     required int nodeId,
     required Offset globalTapPosition,
@@ -1521,7 +1565,9 @@ Future<void> _uploadPhotoBackground(int nodeId, Uint8List bytes) async {
       birthday: r.clearBirthday ? null : r.birthday,
       photoUrl: photoUrl,
       photoBytes: null,
-      address: r.details.address,
+      barangay: r.details.barangay,
+      city: r.details.city,
+      province: r.details.province,
       phone: r.details.phone,
       company: r.details.company,
       jobTitle: r.details.jobTitle,
@@ -1610,7 +1656,9 @@ Future<void> _uploadPhotoBackground(int nodeId, Uint8List bytes) async {
       birthday: r.clearBirthday ? null : r.birthday,
       photoUrl: photoUrl,
       photoBytes: null,
-      address: r.details.address,
+      barangay: r.details.barangay,
+      city: r.details.city,
+      province: r.details.province,
       phone: r.details.phone,
       company: r.details.company,
       jobTitle: r.details.jobTitle,
@@ -1670,7 +1718,9 @@ Future<void> _uploadPhotoBackground(int nodeId, Uint8List bytes) async {
       birthday: r.clearBirthday ? null : r.birthday,
       photoUrl: photoUrl,
       photoBytes: null,
-      address: r.details.address,
+      barangay: r.details.barangay,
+      city: r.details.city,
+      province: r.details.province,
       phone: r.details.phone,
       company: r.details.company,
       jobTitle: r.details.jobTitle,
@@ -1744,7 +1794,9 @@ Future<void> _uploadPhotoBackground(int nodeId, Uint8List bytes) async {
       birthday: r.clearBirthday ? null : r.birthday,
       photoUrl: photoUrl,
       photoBytes: null,
-      address: r.details.address,
+      barangay: r.details.barangay,
+      city: r.details.city,
+      province: r.details.province,
       phone: r.details.phone,
       company: r.details.company,
       jobTitle: r.details.jobTitle,
@@ -2318,7 +2370,9 @@ class _MemberFormSidebarState extends State<_MemberFormSidebar> {
   final _picker = ImagePicker();
 
   late final TextEditingController _nameController;
-  late final TextEditingController _addressController;
+  late final TextEditingController _barangayController;
+  late final TextEditingController _cityController;
+  late final TextEditingController _provinceController;
   late final TextEditingController _phoneController;
   late final TextEditingController _companyController;
   late final TextEditingController _jobTitleController;
@@ -2337,7 +2391,9 @@ class _MemberFormSidebarState extends State<_MemberFormSidebar> {
   void initState() {
     super.initState();
     _nameController = TextEditingController(text: widget.initialName ?? '');
-    _addressController = TextEditingController(text: widget.initialDetails.address ?? '');
+    _barangayController = TextEditingController(text: widget.initialDetails.barangay ?? '');
+    _cityController = TextEditingController(text: widget.initialDetails.city ?? '');
+    _provinceController = TextEditingController(text: widget.initialDetails.province ?? '');
     _phoneController = TextEditingController(text: widget.initialDetails.phone ?? '');
     _companyController = TextEditingController(text: widget.initialDetails.company ?? '');
     _jobTitleController = TextEditingController(text: widget.initialDetails.jobTitle ?? '');
@@ -2352,7 +2408,9 @@ class _MemberFormSidebarState extends State<_MemberFormSidebar> {
   @override
   void dispose() {
     _nameController.dispose();
-    _addressController.dispose();
+    _barangayController.dispose();
+    _cityController.dispose();
+    _provinceController.dispose();
     _phoneController.dispose();
     _companyController.dispose();
     _jobTitleController.dispose();
@@ -2431,7 +2489,9 @@ class _MemberFormSidebarState extends State<_MemberFormSidebar> {
     if (!_formKey.currentState!.validate()) return;
 
     final details = MemberDetails(
-      address: _addressController.text.trim(),
+      barangay: _barangayController.text.trim(),
+      city: _cityController.text.trim(),
+      province: _provinceController.text.trim(),
       phone: _phoneController.text.trim(),
       company: _companyController.text.trim(),
       jobTitle: _jobTitleController.text.trim(),
@@ -2644,10 +2704,20 @@ class _MemberFormSidebarState extends State<_MemberFormSidebar> {
                     },
                   ),
                 ],
-                const SizedBox(height: 8),
+                const SizedBox(height: 14),
                 TextFormField(
-                  controller: _addressController,
-                  decoration: _dec('Address', icon: Icons.home_outlined),
+                  controller: _barangayController,
+                  decoration: _dec('Barangay', icon: Icons.home_outlined),
+                ),
+                const SizedBox(height: 14),
+                                TextFormField(
+                  controller: _cityController,
+                  decoration: _dec('City/Town', icon: Icons.home_outlined),
+                ),
+                const SizedBox(height: 14),
+                                TextFormField(
+                  controller: _provinceController,
+                  decoration: _dec('Province', icon: Icons.home_outlined),
                 ),
                 const SizedBox(height: 14),
                 TextFormField(

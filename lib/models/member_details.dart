@@ -1,5 +1,7 @@
 class MemberDetails {
-  final String? address;
+  final String? barangay;
+  final String? city;
+  final String? province;
   final String? phone;
   final String? company;
   final String? jobTitle;
@@ -9,7 +11,9 @@ class MemberDetails {
   final String? tiktok;
 
   const MemberDetails({
-    this.address,
+    this.barangay,
+    this.city,
+    this.province,
     this.phone,
     this.company,
     this.jobTitle,
@@ -20,7 +24,9 @@ class MemberDetails {
   });
 
   bool get isEmpty =>
-      (address == null || address!.trim().isEmpty) &&
+      (barangay == null || barangay!.trim().isEmpty) &&
+      (city == null || city!.trim().isEmpty) &&
+      (province == null || province!.trim().isEmpty) &&
       (phone == null || phone!.trim().isEmpty) &&
       (company == null || company!.trim().isEmpty) &&
       (jobTitle == null || jobTitle!.trim().isEmpty) &&

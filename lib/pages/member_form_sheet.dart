@@ -113,7 +113,9 @@ class MemberFormSheet {
     // ✅ NEW
     final nameCtrl = TextEditingController(text: (initialName ?? '').trim());
 
-    final addressCtrl = TextEditingController(text: init.address ?? '');
+    final barangayCtrl = TextEditingController(text: init.barangay?? '');
+    final cityCtrl = TextEditingController(text: init.city ?? '');
+    final provinceCtrl = TextEditingController(text: init.province ?? '');
     final phoneCtrl = TextEditingController(text: init.phone ?? '');
     final companyCtrl = TextEditingController(text: init.company ?? '');
     final jobTitleCtrl = TextEditingController(text: init.jobTitle ?? '');
@@ -399,7 +401,9 @@ class MemberFormSheet {
                       const Divider(),
                       const SizedBox(height: 10),
 
-                      field('Address', addressCtrl),
+                      field('Barangay', barangayCtrl),
+                      field('City', cityCtrl),
+                      field('Province', provinceCtrl),
                       field('Tel / Cell No.', phoneCtrl, type: TextInputType.phone),
                       field('Company', companyCtrl),
                       field('Job Title', jobTitleCtrl),
@@ -439,7 +443,9 @@ class MemberFormSheet {
                                     newPhotoBytes: photoBytes,
                                     removePhoto: removePhoto,
                                     details: MemberDetails(
-                                      address: norm(addressCtrl),
+                                      barangay: norm(barangayCtrl),
+                                      city: norm(cityCtrl),
+                                      province: norm(provinceCtrl),
                                       phone: norm(phoneCtrl),
                                       company: norm(companyCtrl),
                                       jobTitle: norm(jobTitleCtrl),
@@ -476,7 +482,9 @@ class MemberFormSheet {
 
     // ✅ dispose
     nameCtrl.dispose();
-    addressCtrl.dispose();
+    barangayCtrl.dispose();
+    cityCtrl.dispose();
+    provinceCtrl.dispose();
     phoneCtrl.dispose();
     companyCtrl.dispose();
     jobTitleCtrl.dispose();
