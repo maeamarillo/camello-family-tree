@@ -10,6 +10,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:image_picker/image_picker.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import '../models/family_node.dart';
 import '../models/gender.dart';
@@ -431,8 +432,8 @@ class _FamilyTreeScreenState extends State<FamilyTreeScreen> {
   }) {
     if (ids.isEmpty) return const SizedBox();
 
-    const int _previewCount = 2;
-    final bool needsToggle = ids.length > _previewCount;
+    const int previewCount = 2;
+    final bool needsToggle = ids.length > previewCount;
     final String sectionKey = label;
 
     return ValueListenableBuilder<Set<String>>(
@@ -440,8 +441,8 @@ class _FamilyTreeScreenState extends State<FamilyTreeScreen> {
       builder: (context, expanded, _) {
         final bool isExpanded = expanded.contains(sectionKey);
         final visibleIds =
-            needsToggle && !isExpanded ? ids.take(_previewCount).toList() : ids;
-        final hiddenCount = ids.length - _previewCount;
+            needsToggle && !isExpanded ? ids.take(previewCount).toList() : ids;
+        final hiddenCount = ids.length - previewCount;
 
         return Padding(
           padding: const EdgeInsets.only(bottom: 10),
@@ -1160,6 +1161,27 @@ Future<void> _showDetailsPopup({
     ].whereType<String>(),
   ];
 
+  // URL resolver for social lines
+  String? socialUrl(String infoLine) {
+    if (infoLine.startsWith('Facebook: ')) {
+      final h = infoLine.substring('Facebook: '.length).trim().replaceFirst(RegExp(r'^@'), '');
+      return 'https://facebook.com/${Uri.encodeComponent(h)}';
+    }
+    if (infoLine.startsWith('Instagram: ')) {
+      final h = infoLine.substring('Instagram: '.length).trim().replaceFirst(RegExp(r'^@'), '');
+      return 'https://instagram.com/${Uri.encodeComponent(h)}';
+    }
+    if (infoLine.startsWith('X: ')) {
+      final h = infoLine.substring('X: '.length).trim().replaceFirst(RegExp(r'^@'), '');
+      return 'https://x.com/${Uri.encodeComponent(h)}';
+    }
+    if (infoLine.startsWith('TikTok: ')) {
+      final h = infoLine.substring('TikTok: '.length).trim().replaceFirst(RegExp(r'^@'), '');
+      return 'https://tiktok.com/@$h';
+    }
+    return null;
+  }
+
   final overlay = Overlay.of(context).context.findRenderObject() as RenderBox;
   final position = RelativeRect.fromRect(
     Rect.fromLTWH(globalTapPosition.dx, globalTapPosition.dy, 1, 1),
@@ -1292,12 +1314,50 @@ Future<void> _showDetailsPopup({
                       Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          for (final line in extraInfoLines)
-                            Padding(
-                              padding: const EdgeInsets.only(bottom: 8),
-                              child: Text(line,
-                                  style: const TextStyle(fontSize: 14)),
-                            ),
+                          for (final infoLine in extraInfoLines)
+                            Builder(builder: (context) {
+                              final url = socialUrl(infoLine);
+                              if (url != null) {
+                                // Split into "Label: " and the handle
+                                final colonIdx = infoLine.indexOf(': ');
+                                final label = colonIdx != -1 ? infoLine.substring(0, colonIdx + 2) : '';
+                                final handle = colonIdx != -1 ? infoLine.substring(colonIdx + 2) : infoLine;
+                                return Padding(
+                                  padding: const EdgeInsets.only(bottom: 8),
+                                  child: GestureDetector(
+                                    onTap: () async {
+                                      final uri = Uri.parse(url);
+                                      if (await canLaunchUrl(uri)) {
+                                        await launchUrl(uri, mode: LaunchMode.externalApplication);
+                                      }
+                                    },
+                                    child: Text.rich(
+                                      TextSpan(
+                                        children: [
+                                          TextSpan(
+                                            text: label,
+                                            style: const TextStyle(fontSize: 14),
+                                          ),
+                                          TextSpan(
+                                            text: handle,
+                                            style: const TextStyle(
+                                              fontSize: 14,
+                                              color: _TreeGreenTheme.primary,
+                                              decoration: TextDecoration.underline,
+                                              decorationColor: _TreeGreenTheme.primary,
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                    ),
+                                  ),
+                                );
+                              }
+                              return Padding(
+                                padding: const EdgeInsets.only(bottom: 8),
+                                child: Text(infoLine, style: const TextStyle(fontSize: 14)),
+                              );
+                            }),
                           const SizedBox(height: 8),
                         ],
                       ),
@@ -2479,6 +2539,7 @@ class _MemberFormSidebarState extends State<_MemberFormSidebar> {
   late Gender _gender;
   DateTime? _birthday;
   bool _clearBirthday = false;
+  String? _birthdayError;
   bool _removePhoto = false;
   Uint8List? _newPhotoBytes;
 
@@ -2580,8 +2641,17 @@ class _MemberFormSidebarState extends State<_MemberFormSidebar> {
     );
   }
 
+  bool get _isAddMode => widget.title.startsWith('Add');
+
   void _submit() {
+    // Validate birthday for add mode
+    if (_isAddMode && _birthday == null && !_clearBirthday) {
+      setState(() => _birthdayError = 'Date of birth is required');
+    } else {
+      setState(() => _birthdayError = null);
+    }
     if (!_formKey.currentState!.validate()) return;
+    if (_isAddMode && _birthday == null && !_clearBirthday) return;
 
     final details = MemberDetails(
       barangay: _barangayController.text.trim(),
@@ -2773,16 +2843,35 @@ class _MemberFormSidebarState extends State<_MemberFormSidebar> {
                 ),
                 const SizedBox(height: 14),
                 InkWell(
-                  onTap: _pickBirthday,
+                  onTap: () async {
+                    await _pickBirthday();
+                    if (_birthday != null) setState(() => _birthdayError = null);
+                  },
                   borderRadius: BorderRadius.circular(14),
-                  child: InputDecorator(
-                    decoration: _dec('Birthday', icon: Icons.cake_outlined),
-                    child: Row(
-                      children: [
-                        Expanded(child: Text(birthdayText)),
-                        const Icon(Icons.calendar_month_outlined, size: 18),
-                      ],
-                    ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      InputDecorator(
+                        decoration: _dec(
+                          _isAddMode ? 'Date of Birth *' : 'Birthday',
+                          icon: Icons.cake_outlined,
+                        ).copyWith(
+                          errorText: _birthdayError,
+                          enabledBorder: _birthdayError != null
+                              ? OutlineInputBorder(
+                                  borderRadius: BorderRadius.circular(14),
+                                  borderSide: const BorderSide(color: Colors.red),
+                                )
+                              : null,
+                        ),
+                        child: Row(
+                          children: [
+                            Expanded(child: Text(birthdayText)),
+                            const Icon(Icons.calendar_month_outlined, size: 18),
+                          ],
+                        ),
+                      ),
+                    ],
                   ),
                 ),
                 if (widget.allowClearBirthday) ...[
@@ -2802,17 +2891,29 @@ class _MemberFormSidebarState extends State<_MemberFormSidebar> {
                 const SizedBox(height: 14),
                 TextFormField(
                   controller: _barangayController,
-                  decoration: _dec('Barangay', icon: Icons.home_outlined),
+                  decoration: _dec(_isAddMode ? 'Barangay *' : 'Barangay', icon: Icons.home_outlined),
+                  validator: (v) {
+                    if (_isAddMode && (v ?? '').trim().isEmpty) return 'Barangay is required';
+                    return null;
+                  },
                 ),
                 const SizedBox(height: 14),
-                                TextFormField(
+                TextFormField(
                   controller: _cityController,
-                  decoration: _dec('City/Town', icon: Icons.home_outlined),
+                  decoration: _dec(_isAddMode ? 'City/Town *' : 'City/Town', icon: Icons.home_outlined),
+                  validator: (v) {
+                    if (_isAddMode && (v ?? '').trim().isEmpty) return 'City/Town is required';
+                    return null;
+                  },
                 ),
                 const SizedBox(height: 14),
-                                TextFormField(
+                TextFormField(
                   controller: _provinceController,
-                  decoration: _dec('Province', icon: Icons.home_outlined),
+                  decoration: _dec(_isAddMode ? 'Province *' : 'Province', icon: Icons.home_outlined),
+                  validator: (v) {
+                    if (_isAddMode && (v ?? '').trim().isEmpty) return 'Province is required';
+                    return null;
+                  },
                 ),
                 const SizedBox(height: 14),
                 TextFormField(
