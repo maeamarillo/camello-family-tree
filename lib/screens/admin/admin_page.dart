@@ -508,7 +508,11 @@ class _AdminDashboardState extends State<_AdminDashboard>
           IconButton(
             tooltip: 'Back to Family Tree',
             icon: const Icon(Icons.home_outlined),
-            onPressed: () => Navigator.pop(context),
+            onPressed: () => Navigator.pushNamedAndRemoveUntil(
+              context,
+              '/home',
+              (route) => false,
+            ),
           ),
           IconButton(
             tooltip: 'Sign out',
