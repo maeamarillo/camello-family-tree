@@ -54,7 +54,7 @@ class _TreeGreenTheme {
   static const Color divider = Color(0xFFD9EADF);
   static const Color shadow = Color(0x1F1F3A29);
   static const Color textMuted = Color(0xFF5F7468);
-  static const Color connector = Color(0xFFA6C9B1);
+  static const Color connector = Color(0xFF1B6B3A);
   static const Color selection = Color(0xFF4FA36D);
   static const Color actionBlue = Color(0xFF4F8F72);
   static const Color actionPink = Color(0xFF8FBF8A);
@@ -801,6 +801,7 @@ class _FamilyTreeScreenState extends State<FamilyTreeScreen> {
     if (_isLinking) return;
     if (_previewMode) return;
     if (!await _requireLogin()) return;
+    if (!mounted) return;
 
     if (_ctrlSelectedIds.isNotEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -2612,7 +2613,7 @@ class _MemberFormSidebarState extends State<_MemberFormSidebar> {
       lastDate: now,
     );
 
-    if (picked == null) return;
+    if (picked == null || !mounted) return;
 
     setState(() {
       _birthday = picked;
@@ -2753,9 +2754,11 @@ class _MemberFormSidebarState extends State<_MemberFormSidebar> {
 
   @override
   Widget build(BuildContext context) {
-    final birthdayText = _clearBirthday
-        ? 'No birthday'
-        : (_birthday != null ? formatDate(_birthday!) : 'Select birthday');
+    final birthdayText = (_clearBirthday || _birthday == null)
+        ? 'Select birthday'
+        : formatDate(_birthday!);
+
+        
 
     return Column(
       children: [
@@ -2857,6 +2860,7 @@ class _MemberFormSidebarState extends State<_MemberFormSidebar> {
                           icon: Icons.cake_outlined,
                         ).copyWith(
                           errorText: _birthdayError,
+                          contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 14),
                           enabledBorder: _birthdayError != null
                               ? OutlineInputBorder(
                                   borderRadius: BorderRadius.circular(14),
@@ -2867,27 +2871,28 @@ class _MemberFormSidebarState extends State<_MemberFormSidebar> {
                         child: Row(
                           children: [
                             Expanded(child: Text(birthdayText)),
-                            const Icon(Icons.calendar_month_outlined, size: 18),
+                            if (widget.allowClearBirthday && _birthday != null && !_clearBirthday)
+                              GestureDetector(
+                                onTap: () {
+                                  setState(() {
+                                    _clearBirthday = true;
+                                    _birthday = null;
+                                    _birthdayError = null;
+                                  });
+                                },
+                                child: const Padding(
+                                  padding: EdgeInsets.only(left: 4),
+                                  child: Icon(Icons.close, size: 16, color: _TreeGreenTheme.textMuted),
+                                ),
+                              )
+                            else
+                              const Icon(Icons.calendar_month_outlined, size: 18),
                           ],
                         ),
                       ),
                     ],
                   ),
                 ),
-                if (widget.allowClearBirthday) ...[
-                  const SizedBox(height: 8),
-                  CheckboxListTile(
-                    contentPadding: EdgeInsets.zero,
-                    value: _clearBirthday,
-                    title: const Text('Clear birthday'),
-                    controlAffinity: ListTileControlAffinity.leading,
-                    onChanged: (v) {
-                      setState(() {
-                        _clearBirthday = v ?? false;
-                      });
-                    },
-                  ),
-                ],
                 const SizedBox(height: 14),
                 TextFormField(
                   controller: _barangayController,
@@ -3578,13 +3583,13 @@ class ConnectorPainter extends CustomPainter {
   void paint(Canvas canvas, Size size) {
     final paint = Paint()
       ..color = _TreeGreenTheme.connector
-      ..strokeWidth = 1.2
+      ..strokeWidth = 3
       ..style = PaintingStyle.stroke
       ..strokeCap = StrokeCap.round;
 
     final spousePaint = Paint()
       ..color = _TreeGreenTheme.connector
-      ..strokeWidth = 1.2
+      ..strokeWidth = 3
       ..style = PaintingStyle.stroke
       ..strokeCap = StrokeCap.round;
 

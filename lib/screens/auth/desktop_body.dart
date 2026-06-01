@@ -84,9 +84,11 @@ class _AssetPreloadPageState extends State<AssetPreloadPage> {
     }
 
     // Loading (default) — spinner while assets download
-    return const Scaffold(
+    return Scaffold(
       body: Center(
-        child: CircularProgressIndicator(color: Colors.green),
+        child: _isLoading
+            ? const CircularProgressIndicator(color: Colors.green)
+            : const SizedBox.shrink(),
       ),
     );
   }
