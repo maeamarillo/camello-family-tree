@@ -112,9 +112,36 @@ class MemberFormSheet {
     );
   }
 
+  static (String, String?, String, String?) _parseInitialName(String? name) {
+    var raw = (name ?? '').trim();
+    String? alias;
+
+    final aliasMatch = RegExp(r'\(([^)]+)\)\s*$').firstMatch(raw);
+    if (aliasMatch != null) {
+      alias = aliasMatch.group(1)?.trim();
+      raw = raw.substring(0, aliasMatch.start).trim();
+    }
+
+    final parts = raw.split(RegExp(r'\s+')).where((p) => p.trim().isNotEmpty).toList();
+    if (parts.isEmpty) return ('', null, '', alias);
+    if (parts.length == 1) return (parts.first, null, '', alias);
+    if (parts.length == 2) return (parts.first, null, parts.last, alias);
+
+    return (
+      parts.first,
+      parts.sublist(1, parts.length - 1).join(' '),
+      parts.last,
+      alias,
+    );
+  }
+
   Future<MemberFormResult> open({
-    // ✅ NEW (name moved into the sheet)
+    // Name fields
     String? initialName,
+    String? initialFirstName,
+    String? initialMiddleName,
+    String? initialLastName,
+    String? initialNickname,
     bool showNameField = false,
 
     required Gender initialGender,
@@ -129,8 +156,11 @@ class MemberFormSheet {
   }) async {
     final init = initialDetails ?? const MemberDetails();
 
-    // ✅ NEW
-    final nameCtrl = TextEditingController(text: (initialName ?? '').trim());
+    final parsedName = _parseInitialName(initialName);
+    final firstNameCtrl = TextEditingController(text: initialFirstName ?? parsedName.$1);
+    final middleNameCtrl = TextEditingController(text: initialMiddleName ?? parsedName.$2 ?? '');
+    final lastNameCtrl = TextEditingController(text: initialLastName ?? parsedName.$3);
+    final nicknameCtrl = TextEditingController(text: initialNickname ?? parsedName.$4 ?? '');
 
     final barangayCtrl = TextEditingController(text: init.barangay?? '');
     final cityCtrl = TextEditingController(text: init.city ?? '');
@@ -148,10 +178,17 @@ class MemberFormSheet {
       return t.isEmpty ? null : t;
     }
 
-    // ✅ NEW
-    String? normName() {
-      final t = nameCtrl.text.trim();
-      return t.isEmpty ? null : t;
+    String displayName() {
+      final parts = <String>[
+        firstNameCtrl.text.trim(),
+        if (middleNameCtrl.text.trim().isNotEmpty) middleNameCtrl.text.trim(),
+        lastNameCtrl.text.trim(),
+      ].where((p) => p.isNotEmpty).toList();
+
+      var display = parts.join(' ').trim();
+      final alias = nicknameCtrl.text.trim();
+      if (display.isNotEmpty && alias.isNotEmpty) display = '$display ($alias)';
+      return display;
     }
 
     final safeAllowed = allowedGenders.isEmpty ? const [Gender.female, Gender.male] : allowedGenders;
@@ -282,7 +319,7 @@ class MemberFormSheet {
                       ),
                       const SizedBox(height: 12),
 
-                      // ✅ NEW: Name field (optional)
+                      // Name fields
                       if (showNameField) ...[
                         Text(
                           'Name',
@@ -292,13 +329,51 @@ class MemberFormSheet {
                           ),
                         ),
                         const SizedBox(height: 8),
+                        Row(
+                          children: [
+                            Expanded(
+                              child: TextField(
+                                controller: firstNameCtrl,
+                                textCapitalization: TextCapitalization.words,
+                                decoration: const InputDecoration(
+                                  border: OutlineInputBorder(),
+                                  isDense: true,
+                                  hintText: 'First name *',
+                                ),
+                              ),
+                            ),
+                            const SizedBox(width: 8),
+                            Expanded(
+                              child: TextField(
+                                controller: lastNameCtrl,
+                                textCapitalization: TextCapitalization.words,
+                                decoration: const InputDecoration(
+                                  border: OutlineInputBorder(),
+                                  isDense: true,
+                                  hintText: 'Last name *',
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 10),
                         TextField(
-                          controller: nameCtrl,
+                          controller: middleNameCtrl,
                           textCapitalization: TextCapitalization.words,
                           decoration: const InputDecoration(
                             border: OutlineInputBorder(),
                             isDense: true,
-                            hintText: 'Enter full name',
+                            hintText: 'Middle name (optional)',
+                          ),
+                        ),
+                        const SizedBox(height: 10),
+                        TextField(
+                          controller: nicknameCtrl,
+                          textCapitalization: TextCapitalization.words,
+                          decoration: const InputDecoration(
+                            border: OutlineInputBorder(),
+                            isDense: true,
+                            hintText: 'Nickname / Alias (optional)',
                           ),
                         ),
                         const SizedBox(height: 14),
@@ -510,11 +585,13 @@ class MemberFormSheet {
                           Expanded(
                             child: FilledButton(
                               onPressed: () {
-                                // ✅ NEW: require name if showNameField
                                 if (showNameField) {
-                                  final n = normName();
-                                  if (n == null) {
-                                    _showError('Name is required.');
+                                  if (firstNameCtrl.text.trim().isEmpty) {
+                                    _showError('First name is required.');
+                                    return;
+                                  }
+                                  if (lastNameCtrl.text.trim().isEmpty) {
+                                    _showError('Last name is required.');
                                     return;
                                   }
                                 }
@@ -523,7 +600,11 @@ class MemberFormSheet {
                                   ctx2,
                                   MemberFormResult(
                                     saved: true,
-                                    name: showNameField ? normName() : null, // ✅ NEW
+                                    name: showNameField ? displayName() : null,
+                                    firstName: showNameField ? firstNameCtrl.text.trim() : null,
+                                    middleName: showNameField ? norm(middleNameCtrl) : null,
+                                    lastName: showNameField ? lastNameCtrl.text.trim() : null,
+                                    nickname: showNameField ? norm(nicknameCtrl) : null,
                                     gender: selectedGender,
                                     birthday: birthday,
                                     clearBirthday: clearBirthday,
@@ -570,7 +651,10 @@ class MemberFormSheet {
     );
 
     // ✅ dispose
-    nameCtrl.dispose();
+    firstNameCtrl.dispose();
+    middleNameCtrl.dispose();
+    lastNameCtrl.dispose();
+    nicknameCtrl.dispose();
     barangayCtrl.dispose();
     cityCtrl.dispose();
     provinceCtrl.dispose();

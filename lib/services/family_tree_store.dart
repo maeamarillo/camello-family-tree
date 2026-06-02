@@ -216,6 +216,10 @@ class FamilyTreeStore extends ChangeNotifier {
 
   FamilyNode createNode({
     required String name,
+    String? firstName,
+    String? middleName,
+    String? lastName,
+    String? nickname,
     required Gender gender,
     required int levelY,
     required double slotX,
@@ -240,6 +244,10 @@ class FamilyTreeStore extends ChangeNotifier {
     final node = FamilyNode(
       id: _nextId++,
       name: name,
+      firstName: firstName,
+      middleName: middleName,
+      lastName: lastName,
+      nickname: nickname,
       gender: gender,
       levelY: levelY,
       slotX: slotX,
@@ -410,7 +418,43 @@ class FamilyTreeStore extends ChangeNotifier {
     if (!canEditNodeId(id)) return;
     final nn = newName.trim();
     if (nn.isEmpty) return;
-    getNode(id).name = nn;
+
+    // Legacy helper: parse a full name and keep the new name-part fields in sync.
+    final parts = nn.split(RegExp(r'\s+')).where((p) => p.trim().isNotEmpty).toList();
+    if (parts.length == 1) {
+      setNameParts(id, firstName: parts.first, lastName: '');
+      return;
+    }
+
+    setNameParts(
+      id,
+      firstName: parts.first,
+      middleName: parts.length > 2 ? parts.sublist(1, parts.length - 1).join(' ') : null,
+      lastName: parts.length > 1 ? parts.last : '',
+    );
+  }
+
+  void setNameParts(
+    int id, {
+    required String firstName,
+    String? middleName,
+    required String lastName,
+    String? nickname,
+  }) {
+    if (!_nodes.containsKey(id)) return;
+    if (!canEditNodeId(id)) return;
+
+    final fn = firstName.trim();
+    final ln = lastName.trim();
+    if (fn.isEmpty || ln.isEmpty) return;
+
+    getNode(id).setNameParts(
+      firstName: fn,
+      middleName: middleName,
+      lastName: ln,
+      nickname: nickname,
+    );
+
     notifyListeners();
     scheduleSaveToCloud();
   }
@@ -655,6 +699,10 @@ class FamilyTreeStore extends ChangeNotifier {
 
   FamilyNode addRoot({
     required String name,
+    String? firstName,
+    String? middleName,
+    String? lastName,
+    String? nickname,
     required Gender gender,
     DateTime? birthday,
     DateTime? deathDate,
@@ -673,6 +721,10 @@ class FamilyTreeStore extends ChangeNotifier {
   }) {
     final root = createNode(
       name: name,
+      firstName: firstName,
+      middleName: middleName,
+      lastName: lastName,
+      nickname: nickname,
       gender: gender,
       levelY: 0,
       slotX: 0,
@@ -699,6 +751,10 @@ class FamilyTreeStore extends ChangeNotifier {
 
   FamilyNode addStandalone({
     required String name,
+    String? firstName,
+    String? middleName,
+    String? lastName,
+    String? nickname,
     required Gender gender,
     DateTime? birthday,
     DateTime? deathDate,
@@ -735,6 +791,10 @@ class FamilyTreeStore extends ChangeNotifier {
 
     final node = createNode(
       name: name,
+      firstName: firstName,
+      middleName: middleName,
+      lastName: lastName,
+      nickname: nickname,
       gender: gender,
       levelY: level,
       slotX: slot,
@@ -786,6 +846,10 @@ class FamilyTreeStore extends ChangeNotifier {
   FamilyNode? addSpouse({
     required int personId,
     required String name,
+    String? firstName,
+    String? middleName,
+    String? lastName,
+    String? nickname,
     DateTime? birthday,
     DateTime? deathDate,
     Uint8List? photoBytes,
@@ -818,6 +882,10 @@ class FamilyTreeStore extends ChangeNotifier {
 
     final spouse = createNode(
       name: name,
+      firstName: firstName,
+      middleName: middleName,
+      lastName: lastName,
+      nickname: nickname,
       gender: spouseGender,
       levelY: person.levelY,
       slotX: slot,
@@ -850,6 +918,10 @@ class FamilyTreeStore extends ChangeNotifier {
     required int personId,
     required Gender parentGender,
     required String name,
+    String? firstName,
+    String? middleName,
+    String? lastName,
+    String? nickname,
     DateTime? birthday,
     DateTime? deathDate,
     Uint8List? photoBytes,
@@ -881,6 +953,10 @@ class FamilyTreeStore extends ChangeNotifier {
 
     final parent = createNode(
       name: name,
+      firstName: firstName,
+      middleName: middleName,
+      lastName: lastName,
+      nickname: nickname,
       gender: parentGender,
       levelY: person.levelY - 1,
       slotX: _newParentSlot(
@@ -923,6 +999,10 @@ class FamilyTreeStore extends ChangeNotifier {
   FamilyNode addChild({
     required int fromNodeId,
     required String name,
+    String? firstName,
+    String? middleName,
+    String? lastName,
+    String? nickname,
     required Gender childGender,
     DateTime? birthday,
     DateTime? deathDate,
@@ -948,6 +1028,10 @@ class FamilyTreeStore extends ChangeNotifier {
 
     final child = createNode(
       name: name,
+      firstName: firstName,
+      middleName: middleName,
+      lastName: lastName,
+      nickname: nickname,
       gender: childGender,
       levelY: from.levelY + 1,
       slotX: slot,

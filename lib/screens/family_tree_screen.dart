@@ -118,6 +118,10 @@ class _MemberFormDrawerRequest {
     required this.title,
     required this.showNameField,
     required this.initialName,
+    required this.initialFirstName,
+    required this.initialMiddleName,
+    required this.initialLastName,
+    required this.initialNickname,
     required this.initialGender,
     required this.allowedGenders,
     required this.initialDetails,
@@ -132,6 +136,10 @@ class _MemberFormDrawerRequest {
   final String title;
   final bool showNameField;
   final String? initialName;
+  final String? initialFirstName;
+  final String? initialMiddleName;
+  final String? initialLastName;
+  final String? initialNickname;
   final Gender initialGender;
   final List<Gender> allowedGenders;
   final MemberDetails initialDetails;
@@ -347,7 +355,15 @@ class _FamilyTreeScreenState extends State<FamilyTreeScreen> {
 
     for (final entry in store.nodes.entries) {
       final node = entry.value;
-      if (node.name.toLowerCase().contains(q)) {
+      final searchable = <String>[
+        node.name,
+        node.firstName,
+        node.middleName ?? '',
+        node.lastName,
+        node.nickname ?? '',
+      ].join(' ').toLowerCase();
+
+      if (searchable.contains(q)) {
         return entry.key;
       }
     }
@@ -554,6 +570,10 @@ class _FamilyTreeScreenState extends State<FamilyTreeScreen> {
     required String title,
     required bool showNameField,
     required String? initialName,
+    String? initialFirstName,
+    String? initialMiddleName,
+    String? initialLastName,
+    String? initialNickname,
     required Gender initialGender,
     required List<Gender> allowedGenders,
     MemberDetails? initialDetails,
@@ -569,6 +589,10 @@ class _FamilyTreeScreenState extends State<FamilyTreeScreen> {
         MemberFormResult(
           saved: false,
           name: null,
+          firstName: initialFirstName,
+          middleName: initialMiddleName,
+          lastName: initialLastName,
+          nickname: initialNickname,
           gender: initialGender,
           details: initialDetails ?? const MemberDetails(),
           birthday: initialBirthday,
@@ -589,6 +613,10 @@ class _FamilyTreeScreenState extends State<FamilyTreeScreen> {
         title: title,
         showNameField: showNameField,
         initialName: initialName,
+        initialFirstName: initialFirstName,
+        initialMiddleName: initialMiddleName,
+        initialLastName: initialLastName,
+        initialNickname: initialNickname,
         initialGender: initialGender,
         allowedGenders: allowedGenders,
         initialDetails: initialDetails ?? const MemberDetails(),
@@ -621,6 +649,10 @@ class _FamilyTreeScreenState extends State<FamilyTreeScreen> {
       MemberFormResult(
         saved: false,
         name: req?.initialName,
+        firstName: req?.initialFirstName,
+        middleName: req?.initialMiddleName,
+        lastName: req?.initialLastName,
+        nickname: req?.initialNickname,
         gender: req?.initialGender ?? Gender.female,
         details: req?.initialDetails ?? const MemberDetails(),
         birthday: req?.initialBirthday,
@@ -994,6 +1026,10 @@ Future<void> _handleLivingDeceasedAction(int nodeId) async {
       title: 'Edit Member Details',
       showNameField: true,
       initialName: n.name,
+      initialFirstName: n.firstName,
+      initialMiddleName: n.middleName,
+      initialLastName: n.lastName,
+      initialNickname: n.nickname,
       initialGender: n.gender,
       allowedGenders: const [Gender.female, Gender.male],
       initialDetails: initial,
@@ -1007,9 +1043,16 @@ Future<void> _handleLivingDeceasedAction(int nodeId) async {
 
     if (!mounted || !r.saved) return;
 
-    final newName = (r.name ?? '').trim();
-    if (newName.isNotEmpty && newName != n.name) {
-      store.renameNode(nodeId, newName);
+    final firstName = (r.firstName ?? '').trim();
+    final lastName = (r.lastName ?? '').trim();
+    if (firstName.isNotEmpty && lastName.isNotEmpty) {
+      store.setNameParts(
+        nodeId,
+        firstName: firstName,
+        middleName: r.middleName,
+        lastName: lastName,
+        nickname: r.nickname,
+      );
     }
 
     await _applyFormToNode(nodeId, r);
@@ -1093,8 +1136,10 @@ Future<void> _handleLivingDeceasedAction(int nodeId) async {
     );
     if (!mounted || !r.saved) return;
 
-    final name = (r.name ?? '').trim();
-    if (name.isEmpty) return;
+    final firstName = (r.firstName ?? '').trim();
+    final lastName = (r.lastName ?? '').trim();
+    final name = r.displayName.trim();
+    if (firstName.isEmpty || lastName.isEmpty || name.isEmpty) return;
 
     final existingId = _findNodeByExactName(name);
     if (existingId != null) {
@@ -1110,6 +1155,10 @@ Future<void> _handleLivingDeceasedAction(int nodeId) async {
 
     store.addRoot(
       name: name,
+      firstName: firstName,
+      middleName: r.middleName,
+      lastName: lastName,
+      nickname: r.nickname,
       gender: r.gender,
       birthday: r.clearBirthday ? null : r.birthday,
       photoUrl: photoUrl,
@@ -1141,8 +1190,10 @@ Future<void> _handleLivingDeceasedAction(int nodeId) async {
     );
     if (!mounted || !r.saved) return;
 
-    final name = (r.name ?? '').trim();
-    if (name.isEmpty) return;
+    final firstName = (r.firstName ?? '').trim();
+    final lastName = (r.lastName ?? '').trim();
+    final name = r.displayName.trim();
+    if (firstName.isEmpty || lastName.isEmpty || name.isEmpty) return;
 
     final existingId = _findNodeByExactName(name);
     if (existingId != null) {
@@ -1158,6 +1209,10 @@ Future<void> _handleLivingDeceasedAction(int nodeId) async {
 
     final newNode = store.addStandalone(
       name: name,
+      firstName: firstName,
+      middleName: r.middleName,
+      lastName: lastName,
+      nickname: r.nickname,
       gender: r.gender,
       birthday: r.clearBirthday ? null : r.birthday,
       photoUrl: photoUrl,
@@ -1774,8 +1829,10 @@ Future<void> _showDetailsPopup({
     );
     if (!mounted || !r.saved) return;
 
-    final name = (r.name ?? '').trim();
-    if (name.isEmpty) return;
+    final firstName = (r.firstName ?? '').trim();
+    final lastName = (r.lastName ?? '').trim();
+    final name = r.displayName.trim();
+    if (firstName.isEmpty || lastName.isEmpty || name.isEmpty) return;
 
     final existingId = _findNodeByExactName(name);
     if (existingId != null) {
@@ -1792,6 +1849,10 @@ Future<void> _showDetailsPopup({
     final added = store.addSpouse(
       personId: personId,
       name: name,
+      firstName: firstName,
+      middleName: r.middleName,
+      lastName: lastName,
+      nickname: r.nickname,
       birthday: r.clearBirthday ? null : r.birthday,
       photoUrl: photoUrl,
       photoBytes: null,
@@ -1864,8 +1925,10 @@ Future<void> _showDetailsPopup({
     );
     if (!mounted || !r.saved) return;
 
-    final name = (r.name ?? '').trim();
-    if (name.isEmpty) return;
+    final firstName = (r.firstName ?? '').trim();
+    final lastName = (r.lastName ?? '').trim();
+    final name = r.displayName.trim();
+    if (firstName.isEmpty || lastName.isEmpty || name.isEmpty) return;
 
     final existingId = _findNodeByExactName(name);
     if (existingId != null) {
@@ -1883,6 +1946,10 @@ Future<void> _showDetailsPopup({
       personId: personId,
       parentGender: r.gender,
       name: name,
+      firstName: firstName,
+      middleName: r.middleName,
+      lastName: lastName,
+      nickname: r.nickname,
       birthday: r.clearBirthday ? null : r.birthday,
       photoUrl: photoUrl,
       photoBytes: null,
@@ -1926,8 +1993,10 @@ Future<void> _showDetailsPopup({
     );
     if (!mounted || !r.saved) return;
 
-    final name = (r.name ?? '').trim();
-    if (name.isEmpty) return;
+    final firstName = (r.firstName ?? '').trim();
+    final lastName = (r.lastName ?? '').trim();
+    final name = r.displayName.trim();
+    if (firstName.isEmpty || lastName.isEmpty || name.isEmpty) return;
 
     final existingId = _findNodeByExactName(name);
     if (existingId != null) {
@@ -1944,6 +2013,10 @@ Future<void> _showDetailsPopup({
     final child = store.addChild(
       fromNodeId: fromNodeId,
       name: name,
+      firstName: firstName,
+      middleName: r.middleName,
+      lastName: lastName,
+      nickname: r.nickname,
       childGender: r.gender,
       birthday: r.clearBirthday ? null : r.birthday,
       photoUrl: photoUrl,
@@ -2002,8 +2075,10 @@ Future<void> _showDetailsPopup({
 
     if (!mounted || !r.saved) return;
 
-    final name = (r.name ?? '').trim();
-    if (name.isEmpty) return;
+    final firstName = (r.firstName ?? '').trim();
+    final lastName = (r.lastName ?? '').trim();
+    final name = r.displayName.trim();
+    if (firstName.isEmpty || lastName.isEmpty || name.isEmpty) return;
 
     final existingId = _findNodeByExactName(name);
     if (existingId != null) {
@@ -2020,6 +2095,10 @@ Future<void> _showDetailsPopup({
     final child = store.addChild(
       fromNodeId: fromNodeId,
       name: name,
+      firstName: firstName,
+      middleName: r.middleName,
+      lastName: lastName,
+      nickname: r.nickname,
       childGender: gender,
       birthday: r.clearBirthday ? null : r.birthday,
       photoUrl: photoUrl,
@@ -2527,6 +2606,10 @@ Future<void> _showDetailsPopup({
                               title: _drawerRequest!.title,
                               showNameField: _drawerRequest!.showNameField,
                               initialName: _drawerRequest!.initialName,
+                              initialFirstName: _drawerRequest!.initialFirstName,
+                              initialMiddleName: _drawerRequest!.initialMiddleName,
+                              initialLastName: _drawerRequest!.initialLastName,
+                              initialNickname: _drawerRequest!.initialNickname,
                               initialGender: _drawerRequest!.initialGender,
                               allowedGenders: _drawerRequest!.allowedGenders,
                               initialDetails: _drawerRequest!.initialDetails,
@@ -2566,6 +2649,10 @@ class _MemberFormSidebar extends StatefulWidget {
     required this.title,
     required this.showNameField,
     required this.initialName,
+    required this.initialFirstName,
+    required this.initialMiddleName,
+    required this.initialLastName,
+    required this.initialNickname,
     required this.initialGender,
     required this.allowedGenders,
     required this.initialDetails,
@@ -2582,6 +2669,10 @@ class _MemberFormSidebar extends StatefulWidget {
   final String title;
   final bool showNameField;
   final String? initialName;
+  final String? initialFirstName;
+  final String? initialMiddleName;
+  final String? initialLastName;
+  final String? initialNickname;
   final Gender initialGender;
   final List<Gender> allowedGenders;
   final MemberDetails initialDetails;
@@ -2602,7 +2693,10 @@ class _MemberFormSidebarState extends State<_MemberFormSidebar> {
   final _formKey = GlobalKey<FormState>();
   final _picker = ImagePicker();
 
-  late final TextEditingController _nameController;
+  late final TextEditingController _firstNameController;
+  late final TextEditingController _middleNameController;
+  late final TextEditingController _lastNameController;
+  late final TextEditingController _nicknameController;
   late final TextEditingController _barangayController;
   late final TextEditingController _cityController;
   late final TextEditingController _provinceController;
@@ -2623,10 +2717,68 @@ class _MemberFormSidebarState extends State<_MemberFormSidebar> {
   bool _removePhoto = false;
   Uint8List? _newPhotoBytes;
 
+  static String? _nullIfBlank(String value) {
+    final v = value.trim();
+    return v.isEmpty ? null : v;
+  }
+
+  static String _buildDisplayName({
+    required String firstName,
+    required String lastName,
+    String? middleName,
+    String? nickname,
+  }) {
+    final parts = <String>[
+      firstName.trim(),
+      if ((middleName ?? '').trim().isNotEmpty) middleName!.trim(),
+      lastName.trim(),
+    ].where((p) => p.isNotEmpty).toList();
+
+    var display = parts.join(' ').trim();
+    final alias = (nickname ?? '').trim();
+    if (display.isNotEmpty && alias.isNotEmpty) display = '$display ($alias)';
+    return display;
+  }
+
+  static (String, String?, String, String?) _parseInitialName(String? name) {
+    var raw = (name ?? '').trim();
+    String? alias;
+
+    final aliasMatch = RegExp(r'\(([^)]+)\)\s*$').firstMatch(raw);
+    if (aliasMatch != null) {
+      alias = aliasMatch.group(1)?.trim();
+      raw = raw.substring(0, aliasMatch.start).trim();
+    }
+
+    final parts = raw.split(RegExp(r'\s+')).where((p) => p.trim().isNotEmpty).toList();
+    if (parts.isEmpty) return ('', null, '', alias);
+    if (parts.length == 1) return (parts.first, null, '', alias);
+    if (parts.length == 2) return (parts.first, null, parts.last, alias);
+
+    return (
+      parts.first,
+      parts.sublist(1, parts.length - 1).join(' '),
+      parts.last,
+      alias,
+    );
+  }
+
   @override
   void initState() {
     super.initState();
-    _nameController = TextEditingController(text: widget.initialName ?? '');
+    final parsed = _parseInitialName(widget.initialName);
+    _firstNameController = TextEditingController(
+      text: widget.initialFirstName ?? parsed.$1,
+    );
+    _middleNameController = TextEditingController(
+      text: widget.initialMiddleName ?? parsed.$2 ?? '',
+    );
+    _lastNameController = TextEditingController(
+      text: widget.initialLastName ?? parsed.$3,
+    );
+    _nicknameController = TextEditingController(
+      text: widget.initialNickname ?? parsed.$4 ?? '',
+    );
     _barangayController = TextEditingController(text: widget.initialDetails.barangay ?? '');
     _cityController = TextEditingController(text: widget.initialDetails.city ?? '');
     _provinceController = TextEditingController(text: widget.initialDetails.province ?? '');
@@ -2644,7 +2796,10 @@ class _MemberFormSidebarState extends State<_MemberFormSidebar> {
 
   @override
   void dispose() {
-    _nameController.dispose();
+    _firstNameController.dispose();
+    _middleNameController.dispose();
+    _lastNameController.dispose();
+    _nicknameController.dispose();
     _barangayController.dispose();
     _cityController.dispose();
     _provinceController.dispose();
@@ -2770,7 +2925,18 @@ class _MemberFormSidebarState extends State<_MemberFormSidebar> {
     widget.onSave(
       MemberFormResult(
         saved: true,
-        name: widget.showNameField ? _nameController.text.trim() : null,
+        name: widget.showNameField
+            ? _buildDisplayName(
+                firstName: _firstNameController.text,
+                middleName: _middleNameController.text,
+                lastName: _lastNameController.text,
+                nickname: _nicknameController.text,
+              )
+            : null,
+        firstName: widget.showNameField ? _firstNameController.text.trim() : null,
+        middleName: widget.showNameField ? _nullIfBlank(_middleNameController.text) : null,
+        lastName: widget.showNameField ? _lastNameController.text.trim() : null,
+        nickname: widget.showNameField ? _nullIfBlank(_nicknameController.text) : null,
         gender: _gender,
         details: details,
         birthday: _clearBirthday ? null : _birthday,
@@ -2924,13 +3090,37 @@ class _MemberFormSidebarState extends State<_MemberFormSidebar> {
                 const SizedBox(height: 18),
                 if (widget.showNameField) ...[
                   TextFormField(
-                    controller: _nameController,
-                    decoration: _dec('Name', icon: Icons.person_outline),
+                    controller: _firstNameController,
+                    textCapitalization: TextCapitalization.words,
+                    decoration: _dec('First name *', icon: Icons.person_outline),
                     validator: (v) {
                       if (!widget.showNameField) return null;
-                      if ((v ?? '').trim().isEmpty) return 'Name is required';
+                      if ((v ?? '').trim().isEmpty) return 'First name is required';
                       return null;
                     },
+                  ),
+                  const SizedBox(height: 14),
+                  TextFormField(
+                    controller: _middleNameController,
+                    textCapitalization: TextCapitalization.words,
+                    decoration: _dec('Middle name (optional)', icon: Icons.badge_outlined),
+                  ),
+                  const SizedBox(height: 14),
+                  TextFormField(
+                    controller: _lastNameController,
+                    textCapitalization: TextCapitalization.words,
+                    decoration: _dec('Last name *', icon: Icons.person_outline),
+                    validator: (v) {
+                      if (!widget.showNameField) return null;
+                      if ((v ?? '').trim().isEmpty) return 'Last name is required';
+                      return null;
+                    },
+                  ),
+                  const SizedBox(height: 14),
+                  TextFormField(
+                    controller: _nicknameController,
+                    textCapitalization: TextCapitalization.words,
+                    decoration: _dec('Nickname / Alias (optional)', icon: Icons.alternate_email),
                   ),
                   const SizedBox(height: 14),
                 ],

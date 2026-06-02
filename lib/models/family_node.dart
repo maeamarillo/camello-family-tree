@@ -7,7 +7,11 @@ import 'gender.dart';
 class FamilyNode {
   FamilyNode({
     required this.id,
-    required this.name,
+    required String name,
+    String? firstName,
+    String? middleName,
+    String? lastName,
+    String? nickname,
     required this.gender,
     required this.levelY,
     required this.slotX,
@@ -28,10 +32,32 @@ class FamilyNode {
     this.ig,
     this.xAccount,
     this.tiktok,
-  });
+  }) {
+    final parsed = _parseLegacyName(name);
+    this.firstName = _cleanRequired(firstName) ?? parsed.$1;
+    this.middleName = _cleanOptional(middleName) ?? parsed.$2;
+    this.lastName = _cleanRequired(lastName) ?? parsed.$3;
+    this.nickname = _cleanOptional(nickname) ?? parsed.$4;
+    this.name = buildDisplayName(
+      firstName: this.firstName,
+      middleName: this.middleName,
+      lastName: this.lastName,
+      nickname: this.nickname,
+      fallback: name,
+    );
+  }
 
   final int id;
-  String name;
+
+  /// Display name used by existing UI/search code.
+  /// It is rebuilt whenever name parts are updated.
+  late String name;
+
+  late String firstName;
+  String? middleName;
+  late String lastName;
+  String? nickname;
+
   Gender gender;
 
   final Set<int> parents = {};
@@ -62,6 +88,80 @@ class FamilyNode {
   String? xAccount;
   String? tiktok;
 
+  static String? _cleanOptional(String? value) {
+    final v = (value ?? '').trim();
+    return v.isEmpty ? null : v;
+  }
+
+  static String? _cleanRequired(String? value) {
+    final v = (value ?? '').trim();
+    return v.isEmpty ? null : v;
+  }
+
+  static String buildDisplayName({
+    required String firstName,
+    String? middleName,
+    required String lastName,
+    String? nickname,
+    String? fallback,
+  }) {
+    final parts = <String>[
+      firstName.trim(),
+      if ((middleName ?? '').trim().isNotEmpty) middleName!.trim(),
+      lastName.trim(),
+    ].where((p) => p.isNotEmpty).toList();
+
+    var display = parts.join(' ').trim();
+    if (display.isEmpty) display = (fallback ?? '').trim();
+    if (display.isEmpty) display = 'Unnamed Member';
+
+    final alias = (nickname ?? '').trim();
+    if (alias.isNotEmpty) display = '$display ($alias)';
+
+    return display;
+  }
+
+  static (String, String?, String, String?) _parseLegacyName(String name) {
+    var raw = name.trim();
+    String? alias;
+
+    final aliasMatch = RegExp(r'\(([^)]+)\)\s*$').firstMatch(raw);
+    if (aliasMatch != null) {
+      alias = aliasMatch.group(1)?.trim();
+      raw = raw.substring(0, aliasMatch.start).trim();
+    }
+
+    final parts = raw.split(RegExp(r'\s+')).where((p) => p.trim().isNotEmpty).toList();
+    if (parts.isEmpty) return ('', null, '', alias);
+    if (parts.length == 1) return (parts.first, null, '', alias);
+    if (parts.length == 2) return (parts.first, null, parts.last, alias);
+
+    return (
+      parts.first,
+      parts.sublist(1, parts.length - 1).join(' '),
+      parts.last,
+      alias,
+    );
+  }
+
+  void setNameParts({
+    required String firstName,
+    String? middleName,
+    required String lastName,
+    String? nickname,
+  }) {
+    this.firstName = firstName.trim();
+    this.middleName = _cleanOptional(middleName);
+    this.lastName = lastName.trim();
+    this.nickname = _cleanOptional(nickname);
+    name = buildDisplayName(
+      firstName: this.firstName,
+      middleName: this.middleName,
+      lastName: this.lastName,
+      nickname: this.nickname,
+    );
+  }
+
   bool get hasPhoto {
     if (photoBytes != null) return true;
     if (photoUrl != null && photoUrl!.trim().isNotEmpty) return true;
@@ -72,8 +172,8 @@ class FamilyNode {
   bool get hasAnyDetails {
     bool has(String? s) => s != null && s.trim().isNotEmpty;
     return has(barangay) ||
-    has(city) ||
-    has(province) ||
+        has(city) ||
+        has(province) ||
         has(phone) ||
         has(company) ||
         has(jobTitle) ||
@@ -105,6 +205,10 @@ class FamilyNode {
       'id': id,
       'ownerUid': ownerUid,
       'name': name,
+      'firstName': firstName,
+      'middleName': middleName,
+      'lastName': lastName,
+      'nickname': nickname,
       'gender': gender.name,
       'levelY': levelY,
       'slotX': slotX,
@@ -140,6 +244,10 @@ class FamilyNode {
     final node = FamilyNode(
       id: (m['id'] as num).toInt(),
       name: (m['name'] ?? '') as String,
+      firstName: m['firstName'] as String?,
+      middleName: m['middleName'] as String?,
+      lastName: m['lastName'] as String?,
+      nickname: (m['nickname'] ?? m['alias']) as String?,
       gender: Gender.values.firstWhere(
         (g) => g.name == (m['gender'] ?? 'female'),
         orElse: () => Gender.female,
