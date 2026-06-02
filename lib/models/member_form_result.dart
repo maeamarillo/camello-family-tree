@@ -11,6 +11,8 @@ class MemberFormResult {
     this.name, // ✅ NEW
     this.birthday,
     this.clearBirthday = false,
+    this.deathDate,
+    this.clearDeathDate = false,
     this.newPhotoBytes,
     this.removePhoto = false,
   });
@@ -26,6 +28,9 @@ class MemberFormResult {
   final DateTime? birthday;
   final bool clearBirthday;
 
+  final DateTime? deathDate;
+  final bool clearDeathDate;
+
   final Uint8List? newPhotoBytes;
   final bool removePhoto;
 
@@ -37,6 +42,8 @@ class MemberFormResult {
       details: const MemberDetails(),
       birthday: null,
       clearBirthday: false,
+      deathDate: null,
+      clearDeathDate: false,
       newPhotoBytes: null,
       removePhoto: false,
     );

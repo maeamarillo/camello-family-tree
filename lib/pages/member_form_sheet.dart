@@ -78,6 +78,24 @@ class MemberFormSheet {
     );
   }
 
+  Future<DateTime?> _pickDeathDate({DateTime? initial}) async {
+    final now = DateTime.now();
+    final firstDate = DateTime(1900, 1, 1);
+    final lastDate = DateTime(now.year, now.month, now.day);
+
+    final init = initial ?? DateTime(now.year, now.month, now.day);
+    final clampedInit =
+        init.isBefore(firstDate) ? firstDate : (init.isAfter(lastDate) ? lastDate : init);
+
+    return showDatePicker(
+      context: context,
+      initialDate: clampedInit,
+      firstDate: firstDate,
+      lastDate: lastDate,
+      helpText: 'Select date of death (or cancel to skip)',
+    );
+  }
+
   Widget _photoPreview(Uint8List? bytes, Gender g) {
     final has = bytes != null;
     return Container(
@@ -103,6 +121,7 @@ class MemberFormSheet {
     List<Gender> allowedGenders = const [Gender.female, Gender.male],
     MemberDetails? initialDetails,
     DateTime? initialBirthday,
+    DateTime? initialDeathDate,
     Uint8List? initialPhotoBytes,
     bool allowRemovePhoto = true,
     bool allowClearBirthday = true,
@@ -149,8 +168,10 @@ class MemberFormSheet {
         Gender selectedGender = initGender;
         Uint8List? photoBytes = initialPhotoBytes;
         DateTime? birthday = initialBirthday;
+        DateTime? deathDate = initialDeathDate;
         bool removePhoto = false;
         bool clearBirthday = false;
+        bool clearDeathDate = false;
 
         final canChangeGender = safeAllowed.length > 1;
 
@@ -203,6 +224,15 @@ class MemberFormSheet {
               setSheetState(() {
                 birthday = picked;
                 clearBirthday = false;
+              });
+            }
+
+            Future<void> pickDeathDate() async {
+              final picked = await _pickDeathDate(initial: deathDate);
+              if (picked == null) return;
+              setSheetState(() {
+                deathDate = picked;
+                clearDeathDate = false;
               });
             }
 
@@ -401,6 +431,63 @@ class MemberFormSheet {
                       const Divider(),
                       const SizedBox(height: 10),
 
+                      Row(
+                        children: [
+                          Expanded(
+                            child: Text(
+                              'Date of Death',
+                              style: TextStyle(
+                                fontWeight: FontWeight.w700,
+                                color: Colors.grey.shade800,
+                              ),
+                            ),
+                          ),
+                          if (allowClearBirthday)
+                            TextButton(
+                              onPressed: () => setSheetState(() {
+                                deathDate = null;
+                                clearDeathDate = true;
+                              }),
+                              child: const Text('Clear'),
+                            ),
+                        ],
+                      ),
+                      const SizedBox(height: 8),
+                      InkWell(
+                        onTap: pickDeathDate,
+                        borderRadius: BorderRadius.circular(12),
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+                          decoration: BoxDecoration(
+                            border: Border.all(color: Colors.grey.shade300),
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                          child: Row(
+                            children: [
+                              const Icon(Icons.sentiment_very_dissatisfied_outlined, size: 18),
+                              const SizedBox(width: 10),
+                              Expanded(
+                                child: Text(
+                                  deathDate == null
+                                      ? 'Tap to select date of death'
+                                      : formatDate(deathDate!),
+                                  style: TextStyle(
+                                    color: deathDate == null
+                                        ? Colors.grey.shade600
+                                        : Colors.black87,
+                                  ),
+                                ),
+                              ),
+                              const Icon(Icons.chevron_right),
+                            ],
+                          ),
+                        ),
+                      ),
+
+                      const SizedBox(height: 14),
+                      const Divider(),
+                      const SizedBox(height: 10),
+
                       field('Barangay', barangayCtrl),
                       field('City', cityCtrl),
                       field('Province', provinceCtrl),
@@ -440,6 +527,8 @@ class MemberFormSheet {
                                     gender: selectedGender,
                                     birthday: birthday,
                                     clearBirthday: clearBirthday,
+                                    deathDate: deathDate,
+                                    clearDeathDate: clearDeathDate,
                                     newPhotoBytes: photoBytes,
                                     removePhoto: removePhoto,
                                     details: MemberDetails(

@@ -220,6 +220,7 @@ class FamilyTreeStore extends ChangeNotifier {
     required int levelY,
     required double slotX,
     DateTime? birthday,
+    DateTime? deathDate,
     String? photoPath,
     Uint8List? photoBytes,
     String? photoUrl,
@@ -244,6 +245,7 @@ class FamilyTreeStore extends ChangeNotifier {
       slotX: slotX,
       ownerUid: uid,
       birthday: birthday,
+      deathDate: deathDate,
       photoPath: photoPath,
       photoBytes: photoBytes,
       photoUrl: photoUrl,
@@ -278,6 +280,14 @@ class FamilyTreeStore extends ChangeNotifier {
     if (!_nodes.containsKey(id)) return;
     if (!canEditNodeId(id)) return;
     getNode(id).birthday = date;
+    notifyListeners();
+    scheduleSaveToCloud();
+  }
+
+  void setDeathDate(int id, DateTime? date) {
+    if (!_nodes.containsKey(id)) return;
+    if (!canEditNodeId(id)) return;
+    getNode(id).deathDate = date;
     notifyListeners();
     scheduleSaveToCloud();
   }
@@ -647,6 +657,7 @@ class FamilyTreeStore extends ChangeNotifier {
     required String name,
     required Gender gender,
     DateTime? birthday,
+    DateTime? deathDate,
     Uint8List? photoBytes,
     String? photoUrl,
     String? barangay,
@@ -666,6 +677,7 @@ class FamilyTreeStore extends ChangeNotifier {
       levelY: 0,
       slotX: 0,
       birthday: birthday,
+      deathDate: deathDate,
       photoBytes: photoBytes,
       photoUrl: photoUrl,
       barangay: barangay,
@@ -689,6 +701,7 @@ class FamilyTreeStore extends ChangeNotifier {
     required String name,
     required Gender gender,
     DateTime? birthday,
+    DateTime? deathDate,
     Uint8List? photoBytes,
     String? photoUrl,
     String? barangay,
@@ -726,6 +739,7 @@ class FamilyTreeStore extends ChangeNotifier {
       levelY: level,
       slotX: slot,
       birthday: birthday,
+      deathDate: deathDate,
       photoBytes: photoBytes,
       photoUrl: photoUrl,
       barangay: barangay,
@@ -773,6 +787,7 @@ class FamilyTreeStore extends ChangeNotifier {
     required int personId,
     required String name,
     DateTime? birthday,
+    DateTime? deathDate,
     Uint8List? photoBytes,
     String? photoUrl,
     String? barangay,
@@ -807,6 +822,7 @@ class FamilyTreeStore extends ChangeNotifier {
       levelY: person.levelY,
       slotX: slot,
       birthday: birthday,
+      deathDate: deathDate,
       photoBytes: photoBytes,
       photoUrl: photoUrl,
       barangay: barangay,
@@ -835,6 +851,7 @@ class FamilyTreeStore extends ChangeNotifier {
     required Gender parentGender,
     required String name,
     DateTime? birthday,
+    DateTime? deathDate,
     Uint8List? photoBytes,
     String? photoUrl,
     String? barangay,
@@ -872,6 +889,7 @@ class FamilyTreeStore extends ChangeNotifier {
         existingOtherParentId: otherParentId,
       ),
       birthday: birthday,
+      deathDate: deathDate,
       photoBytes: photoBytes,
       photoUrl: photoUrl,
       barangay: barangay,
@@ -907,6 +925,7 @@ class FamilyTreeStore extends ChangeNotifier {
     required String name,
     required Gender childGender,
     DateTime? birthday,
+    DateTime? deathDate,
     Uint8List? photoBytes,
     String? photoUrl,
     String? barangay,
@@ -933,6 +952,7 @@ class FamilyTreeStore extends ChangeNotifier {
       levelY: from.levelY + 1,
       slotX: slot,
       birthday: birthday,
+      deathDate: deathDate,
       photoBytes: photoBytes,
       photoUrl: photoUrl,
       barangay: barangay,

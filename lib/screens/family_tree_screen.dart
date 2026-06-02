@@ -122,6 +122,7 @@ class _MemberFormDrawerRequest {
     required this.allowedGenders,
     required this.initialDetails,
     required this.initialBirthday,
+    required this.initialDeathDate,
     required this.initialPhotoBytes,
     required this.initialPhotoProvider,
     required this.allowRemovePhoto,
@@ -135,6 +136,7 @@ class _MemberFormDrawerRequest {
   final List<Gender> allowedGenders;
   final MemberDetails initialDetails;
   final DateTime? initialBirthday;
+  final DateTime? initialDeathDate;
   final Uint8List? initialPhotoBytes;
   final ImageProvider? initialPhotoProvider;
   final bool allowRemovePhoto;
@@ -324,6 +326,8 @@ class _FamilyTreeScreenState extends State<FamilyTreeScreen> {
           details: MemberDetails(),
           birthday: null,
           clearBirthday: false,
+          deathDate: null,
+          clearDeathDate: false,
           removePhoto: false,
           newPhotoBytes: null,
         ),
@@ -554,6 +558,7 @@ class _FamilyTreeScreenState extends State<FamilyTreeScreen> {
     required List<Gender> allowedGenders,
     MemberDetails? initialDetails,
     DateTime? initialBirthday,
+    DateTime? initialDeathDate,
     Uint8List? initialPhotoBytes,
     ImageProvider? initialPhotoProvider,
     required bool allowRemovePhoto,
@@ -568,6 +573,8 @@ class _FamilyTreeScreenState extends State<FamilyTreeScreen> {
           details: initialDetails ?? const MemberDetails(),
           birthday: initialBirthday,
           clearBirthday: false,
+          deathDate: initialDeathDate,
+          clearDeathDate: false,
           removePhoto: false,
           newPhotoBytes: null,
         ),
@@ -586,6 +593,7 @@ class _FamilyTreeScreenState extends State<FamilyTreeScreen> {
         allowedGenders: allowedGenders,
         initialDetails: initialDetails ?? const MemberDetails(),
         initialBirthday: initialBirthday,
+        initialDeathDate: initialDeathDate,
         initialPhotoBytes: initialPhotoBytes,
         initialPhotoProvider: initialPhotoProvider,
         allowRemovePhoto: allowRemovePhoto,
@@ -617,6 +625,8 @@ class _FamilyTreeScreenState extends State<FamilyTreeScreen> {
         details: req?.initialDetails ?? const MemberDetails(),
         birthday: req?.initialBirthday,
         clearBirthday: false,
+        deathDate: req?.initialDeathDate,
+        clearDeathDate: false,
         removePhoto: false,
         newPhotoBytes: null,
       ),
@@ -865,10 +875,23 @@ class _FamilyTreeScreenState extends State<FamilyTreeScreen> {
 Future<void> _applyFormToNode(int nodeId, MemberFormResult r) async {
   if (!r.saved) return;
 
+  final newDeathDate = r.clearDeathDate ? null : r.deathDate;
+
   // 1. Update basic details immediately
   store.setGender(nodeId, r.gender);
   store.setDetails(nodeId, r.details);
   store.setBirthday(nodeId, r.clearBirthday ? null : r.birthday);
+  store.setDeathDate(nodeId, newDeathDate);
+
+  // A filled date of death should automatically mark the member as deceased.
+  // Clearing the date of death should automatically mark the member as living.
+  final afterDeathDateUpdate = store.getNode(nodeId);
+  if (newDeathDate != null && !afterDeathDateUpdate.isDeceased) {
+    store.toggleDeceased(nodeId);
+    store.setDeathDate(nodeId, newDeathDate);
+  } else if (newDeathDate == null && afterDeathDateUpdate.isDeceased) {
+    store.toggleDeceased(nodeId);
+  }
 
   if (r.removePhoto) {
     store.removePhoto(nodeId);
@@ -903,6 +926,55 @@ Future<void> _uploadPhotoBackground(int nodeId, Uint8List bytes) async {
   }
 }
 
+Future<void> _pickDeathDateAndMarkDeceased(int nodeId) async {
+  final node = store.getNode(nodeId);
+  final now = DateTime.now();
+  final initial = node.deathDate ?? now;
+
+  final picked = await showDatePicker(
+    context: context,
+    initialDate: initial,
+    firstDate: DateTime(1800),
+    lastDate: now,
+    helpText: 'Select date of death',
+  );
+
+  if (picked == null || !mounted) return;
+
+  setState(() {
+    final current = store.getNode(nodeId);
+    if (!current.isDeceased) {
+      store.toggleDeceased(nodeId);
+    }
+    store.setDeathDate(nodeId, picked);
+  });
+}
+
+Future<void> _handleLivingDeceasedAction(int nodeId) async {
+  final node = store.getNode(nodeId);
+
+  if (node.isDeceased) {
+    setState(() => store.toggleDeceased(nodeId));
+    return;
+  }
+
+  if (node.deathDate == null) {
+    await _pickDeathDateAndMarkDeceased(nodeId);
+    return;
+  }
+
+  final existingDeathDate = node.deathDate;
+  setState(() {
+    final current = store.getNode(nodeId);
+    if (!current.isDeceased) {
+      store.toggleDeceased(nodeId);
+    }
+    if (existingDeathDate != null) {
+      store.setDeathDate(nodeId, existingDeathDate);
+    }
+  });
+}
+
   Future<void> _editDetailsFlow(int nodeId) async {
     final n = store.getNode(nodeId);
     final initial = MemberDetails(
@@ -926,6 +998,7 @@ Future<void> _uploadPhotoBackground(int nodeId, Uint8List bytes) async {
       allowedGenders: const [Gender.female, Gender.male],
       initialDetails: initial,
       initialBirthday: n.birthday,
+      initialDeathDate: n.deathDate,
       initialPhotoBytes: n.photoBytes,
       initialPhotoProvider: n.hasPhoto ? n.photoProvider : null,
       allowRemovePhoto: true,
@@ -1135,9 +1208,10 @@ Future<void> _showDetailsPopup({
     return '$label: $v';
   }
 
-  // Always‑visible info (birthday + address)
+  // Always-visible info (birthday, death date + address)
   final basicInfoLines = <String>[
     if (node.birthday != null) 'Birthday: ${formatDate(node.birthday!)}',
+    if (node.deathDate != null) 'Date of Death: ${formatDate(node.deathDate!)}',
     if (node.birthday != null)
       node.isDeceased
           ? 'Age: Died at ${_calcAge(node.birthday)}'
@@ -1638,7 +1712,7 @@ Future<void> _showDetailsPopup({
         await _addDaughterFlow(fromNodeId: nodeId);
         break;
       case 'deceased':
-        setState(() => store.toggleDeceased(nodeId));
+        await _handleLivingDeceasedAction(nodeId);
         break;
       case 'delete':
         final ok = await showDialog<bool>(
@@ -2457,6 +2531,7 @@ Future<void> _showDetailsPopup({
                               allowedGenders: _drawerRequest!.allowedGenders,
                               initialDetails: _drawerRequest!.initialDetails,
                               initialBirthday: _drawerRequest!.initialBirthday,
+                              initialDeathDate: _drawerRequest!.initialDeathDate,
                               initialPhotoBytes: _drawerRequest!.initialPhotoBytes,
                               initialPhotoProvider: _drawerRequest!.initialPhotoProvider,
                               allowRemovePhoto: _drawerRequest!.allowRemovePhoto,
@@ -2495,6 +2570,7 @@ class _MemberFormSidebar extends StatefulWidget {
     required this.allowedGenders,
     required this.initialDetails,
     required this.initialBirthday,
+    required this.initialDeathDate,
     required this.initialPhotoBytes,
     required this.initialPhotoProvider,
     required this.allowRemovePhoto,
@@ -2510,6 +2586,7 @@ class _MemberFormSidebar extends StatefulWidget {
   final List<Gender> allowedGenders;
   final MemberDetails initialDetails;
   final DateTime? initialBirthday;
+  final DateTime? initialDeathDate;
   final Uint8List? initialPhotoBytes;
   final ImageProvider? initialPhotoProvider;
   final bool allowRemovePhoto;
@@ -2541,6 +2618,8 @@ class _MemberFormSidebarState extends State<_MemberFormSidebar> {
   DateTime? _birthday;
   bool _clearBirthday = false;
   String? _birthdayError;
+  DateTime? _deathDate;
+  bool _clearDeathDate = false;
   bool _removePhoto = false;
   Uint8List? _newPhotoBytes;
 
@@ -2560,6 +2639,7 @@ class _MemberFormSidebarState extends State<_MemberFormSidebar> {
     _tiktokController = TextEditingController(text: widget.initialDetails.tiktok ?? '');
     _gender = widget.initialGender;
     _birthday = widget.initialBirthday;
+    _deathDate = widget.initialDeathDate;
   }
 
   @override
@@ -2621,6 +2701,26 @@ class _MemberFormSidebarState extends State<_MemberFormSidebar> {
     });
   }
 
+  Future<void> _pickDeathDate() async {
+    final now = DateTime.now();
+    final initial = _deathDate ?? now;
+
+    final picked = await showDatePicker(
+      context: context,
+      initialDate: initial,
+      firstDate: DateTime(1800),
+      lastDate: now,
+      helpText: 'Select date of death',
+    );
+
+    if (picked == null || !mounted) return;
+
+    setState(() {
+      _deathDate = picked;
+      _clearDeathDate = false;
+    });
+  }
+
   InputDecoration _dec(String label, {IconData? icon}) {
     return InputDecoration(
       labelText: label,
@@ -2675,6 +2775,8 @@ class _MemberFormSidebarState extends State<_MemberFormSidebar> {
         details: details,
         birthday: _clearBirthday ? null : _birthday,
         clearBirthday: _clearBirthday,
+        deathDate: _clearDeathDate ? null : _deathDate,
+        clearDeathDate: _clearDeathDate,
         removePhoto: _removePhoto,
         newPhotoBytes: _removePhoto ? null : _newPhotoBytes,
       ),
@@ -2757,6 +2859,10 @@ class _MemberFormSidebarState extends State<_MemberFormSidebar> {
     final birthdayText = (_clearBirthday || _birthday == null)
         ? 'Select birthday'
         : formatDate(_birthday!);
+
+    final deathDateText = (_clearDeathDate || _deathDate == null)
+        ? 'Select date of death'
+        : formatDate(_deathDate!);
 
         
 
@@ -2891,6 +2997,39 @@ class _MemberFormSidebarState extends State<_MemberFormSidebar> {
                         ),
                       ),
                     ],
+                  ),
+                ),
+                const SizedBox(height: 14),
+                InkWell(
+                  onTap: _pickDeathDate,
+                  borderRadius: BorderRadius.circular(14),
+                  child: InputDecorator(
+                    decoration: _dec(
+                      'Date of Death',
+                      icon: Icons.sentiment_very_dissatisfied_outlined,
+                    ).copyWith(
+                      contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 14),
+                    ),
+                    child: Row(
+                      children: [
+                        Expanded(child: Text(deathDateText)),
+                        if (_deathDate != null && !_clearDeathDate)
+                          GestureDetector(
+                            onTap: () {
+                              setState(() {
+                                _clearDeathDate = true;
+                                _deathDate = null;
+                              });
+                            },
+                            child: const Padding(
+                              padding: EdgeInsets.only(left: 4),
+                              child: Icon(Icons.close, size: 16, color: _TreeGreenTheme.textMuted),
+                            ),
+                          )
+                        else
+                          const Icon(Icons.calendar_month_outlined, size: 18),
+                      ],
+                    ),
                   ),
                 ),
                 const SizedBox(height: 14),
@@ -3342,8 +3481,8 @@ class MemberCard extends StatelessWidget {
                                 const SizedBox(width: 4),
                                 Expanded(
                                   child: Text(
-                                    node.isDeceased
-                                        ? 'Died at age ${_calcAge(node.birthday)}'
+                                    node.isDeceased && node.deathDate != null
+                                        ? 'Died ${formatDate(node.deathDate!)}'
                                         : formatDate(node.birthday!),
                                     maxLines: 1,
                                     overflow: TextOverflow.ellipsis,

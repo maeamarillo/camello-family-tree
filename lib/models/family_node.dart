@@ -14,6 +14,7 @@ class FamilyNode {
     this.ownerUid,
     this.isDeceased = false,
     this.birthday,
+    this.deathDate,
     this.photoPath,
     this.photoBytes,
     this.photoUrl,
@@ -44,6 +45,7 @@ class FamilyNode {
   bool isDeceased;
   Offset manualOffset = Offset.zero;
   DateTime? birthday;
+  DateTime? deathDate;
 
   String? photoPath;
   Uint8List? photoBytes;
@@ -111,6 +113,7 @@ class FamilyNode {
         'dy': manualOffset.dy,
       },
       'birthday': birthday?.millisecondsSinceEpoch,
+      'deathDate': deathDate?.millisecondsSinceEpoch,
       'parents': parents.toList(),
       'children': children.toList(),
       'spouses': spouses.toList(),
@@ -148,6 +151,9 @@ class FamilyNode {
       birthday: (m['birthday'] == null)
           ? null
           : DateTime.fromMillisecondsSinceEpoch((m['birthday'] as num).toInt()),
+      deathDate: (m['deathDate'] == null)
+          ? null
+          : DateTime.fromMillisecondsSinceEpoch((m['deathDate'] as num).toInt()),
       photoUrl: m['photoUrl'] as String?,
       photoPath: m['photoPath'] as String?,
     );
