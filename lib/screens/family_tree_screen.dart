@@ -24,17 +24,23 @@ import '../widgets/link_ports.dart';
 import '../widgets/member_photo.dart';
 import '../widgets/plus_port.dart';
 
-/// Returns the age in whole years from [birthday] to today,
-/// or null if [birthday] is null.
-int? _calcAge(DateTime? birthday) {
+/// Returns the age in whole years from [birthday] to [endDate].
+///
+/// If [endDate] is null, age is calculated up to today.
+/// Use the member's date of death as [endDate] for deceased members.
+int? _calcAge(DateTime? birthday, {DateTime? endDate}) {
   if (birthday == null) return null;
-  final today = DateTime.now();
-  int age = today.year - birthday.year;
-  if (today.month < birthday.month ||
-      (today.month == birthday.month && today.day < birthday.day)) {
+
+  final referenceDate = endDate ?? DateTime.now();
+  int age = referenceDate.year - birthday.year;
+
+  if (referenceDate.month < birthday.month ||
+      (referenceDate.month == birthday.month &&
+          referenceDate.day < birthday.day)) {
     age--;
   }
-  return age;
+
+  return age < 0 ? 0 : age;
 }
 
 class FamilyTreeScreen extends StatefulWidget {
@@ -1268,8 +1274,8 @@ Future<void> _showDetailsPopup({
     if (node.birthday != null) 'Birthday: ${formatDate(node.birthday!)}',
     if (node.deathDate != null) 'Date of Death: ${formatDate(node.deathDate!)}',
     if (node.birthday != null)
-      node.isDeceased
-          ? 'Age: Died at ${_calcAge(node.birthday)}'
+      node.deathDate != null
+          ? 'Age: Died at ${_calcAge(node.birthday, endDate: node.deathDate)}'
           : 'Age: ${_calcAge(node.birthday)}',
     ...[
       line('Barangay', node.barangay),
