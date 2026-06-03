@@ -964,18 +964,10 @@ class _FamilyTreeScreenState extends State<FamilyTreeScreen> {
       return;
     }
 
-    if (store.hasCoParentViaChildren(personId)) {
-      messenger.showSnackBar(
-        SnackBar(content: Text('${person.name} already has a co-parent.')),
-      );
-      return;
-    }
-
     final candidates = store.nodes.values.where((candidate) {
       if (candidate.id == personId) return false;
       if (candidate.gender != person.gender.opposite) return false;
       if (candidate.spouses.isNotEmpty) return false;
-      if (store.hasCoParentViaChildren(candidate.id)) return false;
       return true;
     }).toList();
 
