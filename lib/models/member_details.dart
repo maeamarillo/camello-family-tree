@@ -1,19 +1,14 @@
-class MemberDetails {
-  final String? barangay;
-  final String? city;
-  final String? province;
-  final String? phone;
-  final String? company;
-  final String? jobTitle;
-  final String? fb;
-  final String? ig;
-  final String? xAccount;
-  final String? tiktok;
+// lib/models/member_details.dart
+// Add `country` to your existing MemberDetails model.
+// Keep any other existing methods you may have; this is the minimum version
+// needed by the updated family tree files.
 
+class MemberDetails {
   const MemberDetails({
     this.barangay,
     this.city,
     this.province,
+    this.country,
     this.phone,
     this.company,
     this.jobTitle,
@@ -23,15 +18,15 @@ class MemberDetails {
     this.tiktok,
   });
 
-  bool get isEmpty =>
-      (barangay == null || barangay!.trim().isEmpty) &&
-      (city == null || city!.trim().isEmpty) &&
-      (province == null || province!.trim().isEmpty) &&
-      (phone == null || phone!.trim().isEmpty) &&
-      (company == null || company!.trim().isEmpty) &&
-      (jobTitle == null || jobTitle!.trim().isEmpty) &&
-      (fb == null || fb!.trim().isEmpty) &&
-      (ig == null || ig!.trim().isEmpty) &&
-      (xAccount == null || xAccount!.trim().isEmpty) &&
-      (tiktok == null || tiktok!.trim().isEmpty);
+  final String? barangay; // UI label: Street/Brgy/District
+  final String? city; // UI label: Town/Municipality/City
+  final String? province; // UI label: Province/State
+  final String? country;
+  final String? phone;
+  final String? company;
+  final String? jobTitle;
+  final String? fb;
+  final String? ig;
+  final String? xAccount;
+  final String? tiktok;
 }

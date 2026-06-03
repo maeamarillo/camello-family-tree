@@ -231,6 +231,7 @@ class FamilyTreeStore extends ChangeNotifier {
     String? barangay,
     String? city,
     String? province,
+    String? country,
     String? phone,
     String? company,
     String? jobTitle,
@@ -260,6 +261,7 @@ class FamilyTreeStore extends ChangeNotifier {
       barangay: barangay,
       city: city,
       province: province,
+      country: country,
       phone: phone,
       company: company,
       jobTitle: jobTitle,
@@ -346,6 +348,7 @@ class FamilyTreeStore extends ChangeNotifier {
     n.barangay = d.barangay;
     n.city = d.city;
     n.province = d.province;
+    n.country = d.country;
     n.phone = d.phone;
     n.company = d.company;
     n.jobTitle = d.jobTitle;
@@ -711,6 +714,7 @@ class FamilyTreeStore extends ChangeNotifier {
     String? barangay,
     String? city,
     String? province,
+    String? country,
     String? phone,
     String? company,
     String? jobTitle,
@@ -735,6 +739,7 @@ class FamilyTreeStore extends ChangeNotifier {
       barangay: barangay,
       city: city,
       province: province,
+      country: country,
       phone: phone,
       company: company,
       jobTitle: jobTitle,
@@ -763,6 +768,7 @@ class FamilyTreeStore extends ChangeNotifier {
     String? barangay,
     String? city,
     String? province,
+    String? country,
     String? phone,
     String? company,
     String? jobTitle,
@@ -805,6 +811,7 @@ class FamilyTreeStore extends ChangeNotifier {
       barangay: barangay,
       city: city,
       province: province,
+      country: country,
       phone: phone,
       company: company,
       jobTitle: jobTitle,
@@ -857,6 +864,7 @@ class FamilyTreeStore extends ChangeNotifier {
     String? barangay,
     String? city,
     String? province,
+    String? country,
     String? phone,
     String? company,
     String? jobTitle,
@@ -896,6 +904,7 @@ class FamilyTreeStore extends ChangeNotifier {
       barangay: barangay,
       city: city,
       province: province,
+      country: country,
       phone: phone,
       company: company,
       jobTitle: jobTitle,
@@ -929,6 +938,7 @@ class FamilyTreeStore extends ChangeNotifier {
     String? barangay,
     String? city,
     String? province,
+    String? country,
     String? phone,
     String? company,
     String? jobTitle,
@@ -971,6 +981,7 @@ class FamilyTreeStore extends ChangeNotifier {
       barangay: barangay,
       city: city,
       province: province,
+      country: country,
       phone: phone,
       company: company,
       jobTitle: jobTitle,
@@ -1011,6 +1022,7 @@ class FamilyTreeStore extends ChangeNotifier {
     String? barangay,
     String? city,
     String? province,
+    String? country,
     String? phone,
     String? company,
     String? jobTitle,
@@ -1042,6 +1054,7 @@ class FamilyTreeStore extends ChangeNotifier {
       barangay: barangay,
       city: city,
       province: province,
+      country: country,
       phone: phone,
       company: company,
       jobTitle: jobTitle,

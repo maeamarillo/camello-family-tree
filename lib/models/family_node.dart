@@ -25,6 +25,7 @@ class FamilyNode {
     this.barangay,
     this.city,
     this.province,
+    this.country,
     this.phone,
     this.company,
     this.jobTitle,
@@ -80,6 +81,7 @@ class FamilyNode {
   String? barangay;
   String? city;
   String? province;
+  String? country;
   String? phone;
   String? company;
   String? jobTitle;
@@ -174,6 +176,7 @@ class FamilyNode {
     return has(barangay) ||
         has(city) ||
         has(province) ||
+        has(country) ||
         has(phone) ||
         has(company) ||
         has(jobTitle) ||
@@ -224,6 +227,7 @@ class FamilyNode {
       'barangay': barangay,
       'city': city,
       'province': province,
+      'country': country,
       'phone': phone,
       'company': company,
       'jobTitle': jobTitle,
@@ -284,6 +288,7 @@ class FamilyNode {
     node.barangay = m['barangay'] as String?;
     node.city = m['city'] as String?;
     node.province = m['province'] as String?;
+    node.country = m['country'] as String?;
     node.phone = m['phone'] as String?;
     node.company = m['company'] as String?;
     node.jobTitle = m['jobTitle'] as String?;

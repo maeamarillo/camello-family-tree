@@ -822,6 +822,7 @@ class _FamilyTreeScreenState extends State<FamilyTreeScreen> {
                 ),
                 actions: [
                   TextButton(
+                    style: TextButton.styleFrom(foregroundColor: _TreeGreenTheme.primary),
                     onPressed: () => Navigator.pop(dialogContext),
                     child: const Text('Cancel'),
                   ),
@@ -1016,10 +1017,14 @@ class _FamilyTreeScreenState extends State<FamilyTreeScreen> {
         ),
         actions: [
           TextButton(
+            style: TextButton.styleFrom(foregroundColor: _TreeGreenTheme.primary),
             onPressed: () => Navigator.pop(ctx, false),
             child: const Text('Cancel'),
           ),
           FilledButton(
+            style: FilledButton.styleFrom(
+              backgroundColor: _TreeGreenTheme.primary,
+            ),
             onPressed: () => Navigator.pop(ctx, true),
             child: const Text('Log out'),
           ),
@@ -1106,6 +1111,20 @@ Future<void> _pickDeathDateAndMarkDeceased(int nodeId) async {
     firstDate: DateTime(1800),
     lastDate: now,
     helpText: 'Select date of death',
+    builder: (context, child) => Theme(
+      data: Theme.of(context).copyWith(
+        colorScheme: const ColorScheme.light(
+          primary: _TreeGreenTheme.primary,
+          onPrimary: Colors.white,
+          surface: _TreeGreenTheme.surface,
+          onSurface: Color(0xFF1A2E22),
+        ),
+        textButtonTheme: TextButtonThemeData(
+          style: TextButton.styleFrom(foregroundColor: _TreeGreenTheme.primary),
+        ),
+      ),
+      child: child!,
+    ),
   );
 
   if (picked == null || !mounted) return;
@@ -1150,6 +1169,7 @@ Future<void> _handleLivingDeceasedAction(int nodeId) async {
       barangay: n.barangay,
       city: n.city,
       province: n.province,
+      country: n.country,
       phone: n.phone,
       company: n.company,
       jobTitle: n.jobTitle,
@@ -1238,6 +1258,7 @@ Future<void> _handleLivingDeceasedAction(int nodeId) async {
         ),
         actions: [
           TextButton(
+            style: TextButton.styleFrom(foregroundColor: _TreeGreenTheme.primary),
             onPressed: () => Navigator.pop(ctx),
             child: const Text('Cancel'),
           ),
@@ -1303,6 +1324,7 @@ Future<void> _handleLivingDeceasedAction(int nodeId) async {
       barangay: r.details.barangay,
       city: r.details.city,
       province: r.details.province,
+      country: r.details.country,
       phone: r.details.phone,
       company: r.details.company,
       jobTitle: r.details.jobTitle,
@@ -1362,6 +1384,7 @@ Future<void> _handleLivingDeceasedAction(int nodeId) async {
       barangay: r.details.barangay,
       city: r.details.city,
       province: r.details.province,
+      country: r.details.country,
       phone: r.details.phone,
       company: r.details.company,
       jobTitle: r.details.jobTitle,
@@ -1411,9 +1434,10 @@ Future<void> _showDetailsPopup({
           ? 'Age: Died at ${_calcAge(node.birthday, endDate: node.deathDate)}'
           : 'Age: ${_calcAge(node.birthday)}',
     ...[
-      line('Barangay', node.barangay),
-      line('City/Town', node.city),
-      line('Province', node.province),
+      line('Street/Brgy/District', node.barangay),
+      line('Town/Municipality/City', node.city),
+      line('Province/State', node.province),
+      line('Country', node.country),
     ].whereType<String>(),
   ];
 
@@ -1942,6 +1966,7 @@ Future<void> _showDetailsPopup({
             content: const Text('This will remove the member and all related links.'),
             actions: [
               TextButton(
+                style: TextButton.styleFrom(foregroundColor: _TreeGreenTheme.primary),
                 onPressed: () => Navigator.pop(dctx, false),
                 child: const Text('Cancel'),
               ),
@@ -2024,6 +2049,7 @@ Future<void> _showDetailsPopup({
       barangay: r.details.barangay,
       city: r.details.city,
       province: r.details.province,
+      country: r.details.country,
       phone: r.details.phone,
       company: r.details.company,
       jobTitle: r.details.jobTitle,
@@ -2121,6 +2147,7 @@ Future<void> _showDetailsPopup({
       barangay: r.details.barangay,
       city: r.details.city,
       province: r.details.province,
+      country: r.details.country,
       phone: r.details.phone,
       company: r.details.company,
       jobTitle: r.details.jobTitle,
@@ -2210,6 +2237,7 @@ Future<void> _showDetailsPopup({
       barangay: r.details.barangay,
       city: r.details.city,
       province: r.details.province,
+      country: r.details.country,
       phone: r.details.phone,
       company: r.details.company,
       jobTitle: r.details.jobTitle,
@@ -2757,6 +2785,7 @@ class _MemberFormSidebarState extends State<_MemberFormSidebar> {
   late final TextEditingController _barangayController;
   late final TextEditingController _cityController;
   late final TextEditingController _provinceController;
+  late final TextEditingController _countryController;
   late final TextEditingController _phoneController;
   late final TextEditingController _companyController;
   late final TextEditingController _jobTitleController;
@@ -2839,6 +2868,7 @@ class _MemberFormSidebarState extends State<_MemberFormSidebar> {
     _barangayController = TextEditingController(text: widget.initialDetails.barangay ?? '');
     _cityController = TextEditingController(text: widget.initialDetails.city ?? '');
     _provinceController = TextEditingController(text: widget.initialDetails.province ?? '');
+    _countryController = TextEditingController(text: widget.initialDetails.country ?? '');
     _phoneController = TextEditingController(text: widget.initialDetails.phone ?? '');
     _companyController = TextEditingController(text: widget.initialDetails.company ?? '');
     _jobTitleController = TextEditingController(text: widget.initialDetails.jobTitle ?? '');
@@ -2860,6 +2890,7 @@ class _MemberFormSidebarState extends State<_MemberFormSidebar> {
     _barangayController.dispose();
     _cityController.dispose();
     _provinceController.dispose();
+    _countryController.dispose();
     _phoneController.dispose();
     _companyController.dispose();
     _jobTitleController.dispose();
@@ -2903,6 +2934,20 @@ class _MemberFormSidebarState extends State<_MemberFormSidebar> {
       initialDate: initial,
       firstDate: DateTime(1800),
       lastDate: now,
+      builder: (context, child) => Theme(
+        data: Theme.of(context).copyWith(
+          colorScheme: const ColorScheme.light(
+            primary: _TreeGreenTheme.primary,
+            onPrimary: Colors.white,
+            surface: _TreeGreenTheme.surface,
+            onSurface: Color(0xFF1A2E22),
+          ),
+          textButtonTheme: TextButtonThemeData(
+            style: TextButton.styleFrom(foregroundColor: _TreeGreenTheme.primary),
+          ),
+        ),
+        child: child!,
+      ),
     );
 
     if (picked == null || !mounted) return;
@@ -2923,6 +2968,20 @@ class _MemberFormSidebarState extends State<_MemberFormSidebar> {
       firstDate: DateTime(1800),
       lastDate: now,
       helpText: 'Select date of death',
+      builder: (context, child) => Theme(
+        data: Theme.of(context).copyWith(
+          colorScheme: const ColorScheme.light(
+            primary: _TreeGreenTheme.primary,
+            onPrimary: Colors.white,
+            surface: _TreeGreenTheme.surface,
+            onSurface: Color(0xFF1A2E22),
+          ),
+          textButtonTheme: TextButtonThemeData(
+            style: TextButton.styleFrom(foregroundColor: _TreeGreenTheme.primary),
+          ),
+        ),
+        child: child!,
+      ),
     );
 
     if (picked == null || !mounted) return;
@@ -2970,6 +3029,7 @@ class _MemberFormSidebarState extends State<_MemberFormSidebar> {
       barangay: _barangayController.text.trim(),
       city: _cityController.text.trim(),
       province: _provinceController.text.trim(),
+      country: _countryController.text.trim(),
       phone: _phoneController.text.trim(),
       company: _companyController.text.trim(),
       jobTitle: _jobTitleController.text.trim(),
@@ -3133,6 +3193,10 @@ class _MemberFormSidebarState extends State<_MemberFormSidebar> {
 ),
                     if (widget.allowRemovePhoto)
                       OutlinedButton.icon(
+                        style: OutlinedButton.styleFrom(
+                          foregroundColor: _TreeGreenTheme.primary,
+                          side: const BorderSide(color: _TreeGreenTheme.primary),
+                        ),
                         onPressed: () {
                           setState(() {
                             _removePhoto = true;
@@ -3282,27 +3346,36 @@ class _MemberFormSidebarState extends State<_MemberFormSidebar> {
                 const SizedBox(height: 14),
                 TextFormField(
                   controller: _barangayController,
-                  decoration: _dec(_isAddMode ? 'Barangay *' : 'Barangay', icon: Icons.home_outlined),
+                  decoration: _dec(_isAddMode ? 'Street/Brgy/District *' : 'Street/Brgy/District', icon: Icons.home_outlined),
                   validator: (v) {
-                    if (_isAddMode && (v ?? '').trim().isEmpty) return 'Barangay is required';
+                    if (_isAddMode && (v ?? '').trim().isEmpty) return 'Street/Brgy/District is required';
                     return null;
                   },
                 ),
                 const SizedBox(height: 14),
                 TextFormField(
                   controller: _cityController,
-                  decoration: _dec(_isAddMode ? 'City/Town *' : 'City/Town', icon: Icons.home_outlined),
+                  decoration: _dec(_isAddMode ? 'Town/Municipality/City *' : 'Town/Municipality/City', icon: Icons.location_city_outlined),
                   validator: (v) {
-                    if (_isAddMode && (v ?? '').trim().isEmpty) return 'City/Town is required';
+                    if (_isAddMode && (v ?? '').trim().isEmpty) return 'Town/Municipality/City is required';
                     return null;
                   },
                 ),
                 const SizedBox(height: 14),
                 TextFormField(
                   controller: _provinceController,
-                  decoration: _dec(_isAddMode ? 'Province *' : 'Province', icon: Icons.home_outlined),
+                  decoration: _dec(_isAddMode ? 'Province/State *' : 'Province/State', icon: Icons.map_outlined),
                   validator: (v) {
-                    if (_isAddMode && (v ?? '').trim().isEmpty) return 'Province is required';
+                    if (_isAddMode && (v ?? '').trim().isEmpty) return 'Province/State is required';
+                    return null;
+                  },
+                ),
+                const SizedBox(height: 14),
+                TextFormField(
+                  controller: _countryController,
+                  decoration: _dec(_isAddMode ? 'Country *' : 'Country', icon: Icons.public_outlined),
+                  validator: (v) {
+                    if (_isAddMode && (v ?? '').trim().isEmpty) return 'Country is required';
                     return null;
                   },
                 ),
