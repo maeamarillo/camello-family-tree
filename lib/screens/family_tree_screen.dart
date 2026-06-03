@@ -19,10 +19,7 @@ import '../models/member_form_result.dart';
 import '../pages/photo_viewer_page.dart';
 import '../services/family_tree_store.dart';
 import '../utilities/date_format.dart';
-import '../utilities/geometry.dart';
-import '../widgets/link_ports.dart';
 import '../widgets/member_photo.dart';
-import '../widgets/plus_port.dart';
 
 /// Returns the age in whole years from [birthday] to [endDate].
 ///
@@ -55,7 +52,6 @@ class _TreeGreenTheme {
   static const Color surface = Color(0xFFFFFFFF);
   static const Color softSurface = Color(0xFFF7FCF8);
   static const Color primary = Color(0xFF2E7D5A);
-  static const Color accent = Color(0xFF67B37F);
   static const Color border = Color(0xFFCFE5D6);
   static const Color divider = Color(0xFFD9EADF);
   static const Color shadow = Color(0x1F1F3A29);
@@ -184,19 +180,10 @@ class _FamilyTreeScreenState extends State<FamilyTreeScreen> {
 
   static const double _minZoom = 0.3;
   static const double _maxZoom = 3.0;
-  static const double _snapRadius = 70.0;
-
   bool _didInitialCenter = false;
   bool _syncingFromController = false;
   double _zoomValue = 1.0;
 
-  bool _isLinking = false;
-  int? _linkFromNodeId;
-  LinkPort? _linkPort;
-  Offset _linkStartScene = Offset.zero;
-  Offset _linkCurrentViewport = Offset.zero;
-  int? _hoverTargetId;
-  Offset _snappedEndViewport = Offset.zero;
 
   int? _hoveredNodeId;
   int? _draggingNodeId;
@@ -693,140 +680,163 @@ class _FamilyTreeScreenState extends State<FamilyTreeScreen> {
     setState(() => _zoomValue = newZoom);
   }
 
-  Offset _sceneToViewport(Offset scenePoint) {
-    final o = MatrixUtils.transformPoint(_tc.value, scenePoint);
-    return Offset(o.dx, o.dy);
-  }
-
-  /// Correctly converts a global pointer position to the shifted container's local coordinates.
-  Offset _globalToViewport(Offset global) {
+  Offset _currentViewportSceneCenter() {
     final box =
         _viewerContainerKey.currentContext?.findRenderObject() as RenderBox?;
-    if (box == null) return Offset.zero;
-    return box.globalToLocal(global);
+
+    final viewportCenter = box == null
+        ? Offset(
+            MediaQuery.of(context).size.width / 2,
+            MediaQuery.of(context).size.height / 2,
+          )
+        : Offset(box.size.width / 2, box.size.height / 2);
+
+    return _tc.toScene(viewportCenter);
   }
 
-  int? _nearestNodeInViewport(Offset viewportPoint, {int? excludeId}) {
-    int? bestId;
-    double bestDist = double.infinity;
+  void _placeNodeAtSceneCenter(int nodeId, Offset sceneCenter) {
+    final currentTopLeft = _lastLayoutScene[nodeId];
+    if (currentTopLeft == null) return;
 
-    for (final e in _lastLayoutScene.entries) {
-      if (excludeId != null && e.key == excludeId) continue;
-
-      final rectScene = Rect.fromLTWH(
-        e.value.dx,
-        e.value.dy,
-        cardSize.width,
-        cardSize.height,
-      );
-
-      final tl = _sceneToViewport(rectScene.topLeft);
-      final br = _sceneToViewport(rectScene.bottomRight);
-      final rectVp = Rect.fromPoints(tl, br);
-
-      final d = distancePointToRect(viewportPoint, rectVp);
-      if (d < bestDist) {
-        bestDist = d;
-        bestId = e.key;
-      }
-    }
-
-    if (bestId == null) return null;
-    return bestDist <= _snapRadius ? bestId : null;
-  }
-
-  void _startLink({
-    required int fromNodeId,
-    required LinkPort port,
-    required Offset startScene,
-    required Offset startViewport,
-  }) {
-    setState(() {
-      if (_previewMode) return;
-      _isLinking = true;
-      _linkFromNodeId = fromNodeId;
-      _linkPort = port;
-      _linkStartScene = startScene;
-      _linkCurrentViewport = startViewport;
-      _hoverTargetId = null;
-      _snappedEndViewport = startViewport;
-      _hoveredNodeId = fromNodeId;
-    });
-
-    _updateLink(startViewport);
-  }
-
-  void _updateLink(Offset viewportPoint) {
-    if (!_isLinking) return;
-    final fromId = _linkFromNodeId;
-    if (fromId == null) return;
-
-    final targetId = _nearestNodeInViewport(viewportPoint, excludeId: fromId);
-    Offset snapped = viewportPoint;
-
-    if (targetId != null) {
-      final topLeftScene = _lastLayoutScene[targetId]!;
-      final rectScene = Rect.fromLTWH(
-        topLeftScene.dx,
-        topLeftScene.dy,
-        cardSize.width,
-        cardSize.height,
-      );
-
-      final tl = _sceneToViewport(rectScene.topLeft);
-      final br = _sceneToViewport(rectScene.bottomRight);
-      final rectVp = Rect.fromPoints(tl, br);
-
-      snapped = nearestPointOnRect(viewportPoint, rectVp);
-    }
+    final desiredTopLeft = sceneCenter -
+        Offset(cardSize.width / 2, cardSize.height / 2);
+    final delta = desiredTopLeft - currentTopLeft;
 
     setState(() {
-      _linkCurrentViewport = viewportPoint;
-      _hoverTargetId = targetId;
-      _snappedEndViewport = snapped;
+      store.addManualOffset(nodeId, delta);
+      _hoveredNodeId = nodeId;
     });
   }
 
-  void _endLink(Offset viewportPoint) {
-    if (!_isLinking) return;
+  bool _memberMatchesSearch(FamilyNode node, String query) {
+    final q = query.trim().toLowerCase();
+    if (q.isEmpty) return true;
 
-    final fromId = _linkFromNodeId;
-    final port = _linkPort;
-    final targetId = _hoverTargetId;
+    final searchable = <String>[
+      node.name,
+      node.firstName,
+      node.middleName ?? '',
+      node.lastName,
+      node.nickname ?? '',
+      node.gender.label,
+    ].join(' ').toLowerCase();
 
-    final beforePositions = Map<int, Offset>.from(_lastLayoutScene);
+    return searchable.contains(q);
+  }
 
-    setState(() {
-      _isLinking = false;
-      _linkFromNodeId = null;
-      _linkPort = null;
-      _hoverTargetId = null;
-    });
+  Future<int?> _pickExistingMemberToConnect({
+    required String title,
+    required String emptyMessage,
+    required List<FamilyNode> candidates,
+  }) async {
+    final sortedCandidates = candidates.toList()
+      ..sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
 
-    if (fromId == null || port == null || targetId == null) return;
-
-    bool ok = false;
-
-    switch (port) {
-      case LinkPort.parentTop:
-        ok = store.tryLinkExistingParent(parentId: targetId, childId: fromId);
-        break;
-      case LinkPort.childBottom:
-        ok = store.tryLinkExistingChild(parentId: fromId, childId: targetId);
-        break;
-      case LinkPort.spouseLeft:
-      case LinkPort.spouseRight:
-        ok = store.tryLinkExistingSpouses(aId: fromId, bId: targetId);
-        break;
-    }
-
-    if (!ok) {
+    if (sortedCandidates.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Cannot connect these tiles (rules blocked).')),
+        SnackBar(content: Text(emptyMessage)),
       );
-      return;
+      return null;
     }
 
+    final controller = TextEditingController();
+
+    try {
+      return await showDialog<int>(
+        context: context,
+        builder: (dialogContext) {
+          String query = '';
+
+          return StatefulBuilder(
+            builder: (context, setDialogState) {
+              final filtered = sortedCandidates
+                  .where((node) => _memberMatchesSearch(node, query))
+                  .toList();
+
+              return AlertDialog(
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(20),
+                ),
+                title: Text(title),
+                content: SizedBox(
+                  width: 420,
+                  height: 430,
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      TextField(
+                        controller: controller,
+                        autofocus: true,
+                        decoration: InputDecoration(
+                          hintText: 'Search member name...',
+                          prefixIcon: const Icon(Icons.search),
+                          border: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(14),
+                          ),
+                          isDense: true,
+                        ),
+                        onChanged: (value) {
+                          setDialogState(() => query = value);
+                        },
+                      ),
+                      const SizedBox(height: 12),
+                      Expanded(
+                        child: filtered.isEmpty
+                            ? const Center(
+                                child: Text(
+                                  'No matching members found.',
+                                  style: TextStyle(
+                                    color: _TreeGreenTheme.textMuted,
+                                  ),
+                                ),
+                              )
+                            : ListView.separated(
+                                itemCount: filtered.length,
+                                separatorBuilder: (_, __) =>
+                                    const Divider(height: 1),
+                                itemBuilder: (context, index) {
+                                  final member = filtered[index];
+                                  return ListTile(
+                                    leading: CircleAvatar(
+                                      backgroundColor: member.gender.tone,
+                                      child: Icon(
+                                        member.gender.icon,
+                                        color: _TreeGreenTheme.textMuted,
+                                      ),
+                                    ),
+                                    title: Text(
+                                      member.name,
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                    ),
+                                    subtitle: Text(member.gender.label),
+                                    trailing: const Icon(Icons.link),
+                                    onTap: () =>
+                                        Navigator.pop(dialogContext, member.id),
+                                  );
+                                },
+                              ),
+                      ),
+                    ],
+                  ),
+                ),
+                actions: [
+                  TextButton(
+                    onPressed: () => Navigator.pop(dialogContext),
+                    child: const Text('Cancel'),
+                  ),
+                ],
+              );
+            },
+          );
+        },
+      );
+    } finally {
+      controller.dispose();
+    }
+  }
+
+  void _preserveLayoutPositionsAfterRelayout(Map<int, Offset> beforePositions) {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
 
@@ -845,31 +855,152 @@ class _FamilyTreeScreenState extends State<FamilyTreeScreen> {
     });
   }
 
-  Future<void> _handlePortTap(int nodeId, LinkPort port) async {
-    if (_isLinking) return;
+  Future<void> _connectExistingParentFlow({required int personId}) async {
     if (_previewMode) return;
     if (!await _requireLogin()) return;
     if (!mounted) return;
 
-    if (_ctrlSelectedIds.isNotEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Selection active. Ctrl+Click tiles to unselect first.')),
+    final messenger = ScaffoldMessenger.of(context);
+    final person = store.getNode(personId);
+
+    if (person.parents.length >= 2) {
+      messenger.showSnackBar(
+        SnackBar(content: Text('${person.name} already has 2 parents.')),
       );
       return;
     }
 
-    switch (port) {
-      case LinkPort.parentTop:
-        await _addParentFlow(personId: nodeId);
-        break;
-      case LinkPort.childBottom:
-        await _addChildFlow(fromNodeId: nodeId);
-        break;
-      case LinkPort.spouseLeft:
-      case LinkPort.spouseRight:
-        await _addSpouseFlow(personId: nodeId);
-        break;
+    final (femaleParent, maleParent) = store.parentPairForPerson(personId);
+    final allowedGenders = <Gender>{
+      if (femaleParent == null) Gender.female,
+      if (maleParent == null) Gender.male,
+    };
+
+    final candidates = store.nodes.values.where((candidate) {
+      if (candidate.id == personId) return false;
+      if (person.parents.contains(candidate.id)) return false;
+      if (!allowedGenders.contains(candidate.gender)) return false;
+      return true;
+    }).toList();
+
+    final parentId = await _pickExistingMemberToConnect(
+      title: 'Connect Existing Parent',
+      emptyMessage: 'No available members can be connected as a parent.',
+      candidates: candidates,
+    );
+
+    if (!mounted || parentId == null) return;
+
+    final beforePositions = Map<int, Offset>.from(_lastLayoutScene);
+    final ok = store.tryLinkExistingParent(
+      parentId: parentId,
+      childId: personId,
+    );
+
+    if (!ok) {
+      messenger.showSnackBar(
+        const SnackBar(content: Text('Cannot connect this parent (rules blocked).')),
+      );
+      return;
     }
+
+    setState(() => _hoveredNodeId = parentId);
+    _preserveLayoutPositionsAfterRelayout(beforePositions);
+  }
+
+  Future<void> _connectExistingChildFlow({required int parentId}) async {
+    if (_previewMode) return;
+    if (!await _requireLogin()) return;
+    if (!mounted) return;
+
+    final messenger = ScaffoldMessenger.of(context);
+    final parent = store.getNode(parentId);
+
+    final candidates = store.nodes.values.where((candidate) {
+      if (candidate.id == parentId) return false;
+      if (parent.children.contains(candidate.id)) return false;
+      if (candidate.parents.length >= 2) return false;
+      return true;
+    }).toList();
+
+    final childId = await _pickExistingMemberToConnect(
+      title: 'Connect Existing Child',
+      emptyMessage: 'No available members can be connected as a child.',
+      candidates: candidates,
+    );
+
+    if (!mounted || childId == null) return;
+
+    final beforePositions = Map<int, Offset>.from(_lastLayoutScene);
+    final ok = store.tryLinkExistingChild(
+      parentId: parentId,
+      childId: childId,
+    );
+
+    if (!ok) {
+      messenger.showSnackBar(
+        const SnackBar(content: Text('Cannot connect this child (rules blocked).')),
+      );
+      return;
+    }
+
+    setState(() => _hoveredNodeId = childId);
+    _preserveLayoutPositionsAfterRelayout(beforePositions);
+  }
+
+  Future<void> _connectExistingSpouseFlow({required int personId}) async {
+    if (_previewMode) return;
+    if (!await _requireLogin()) return;
+    if (!mounted) return;
+
+    final messenger = ScaffoldMessenger.of(context);
+    final person = store.getNode(personId);
+
+    if (person.spouses.isNotEmpty) {
+      messenger.showSnackBar(
+        SnackBar(content: Text('${person.name} already has a spouse.')),
+      );
+      return;
+    }
+
+    if (store.hasCoParentViaChildren(personId)) {
+      messenger.showSnackBar(
+        SnackBar(content: Text('${person.name} already has a co-parent.')),
+      );
+      return;
+    }
+
+    final candidates = store.nodes.values.where((candidate) {
+      if (candidate.id == personId) return false;
+      if (candidate.gender != person.gender.opposite) return false;
+      if (candidate.spouses.isNotEmpty) return false;
+      if (store.hasCoParentViaChildren(candidate.id)) return false;
+      return true;
+    }).toList();
+
+    final spouseId = await _pickExistingMemberToConnect(
+      title: 'Connect Existing Spouse',
+      emptyMessage: 'No available members can be connected as a spouse.',
+      candidates: candidates,
+    );
+
+    if (!mounted || spouseId == null) return;
+
+    final beforePositions = Map<int, Offset>.from(_lastLayoutScene);
+    final ok = store.tryLinkExistingSpouses(
+      aId: personId,
+      bId: spouseId,
+    );
+
+    if (!ok) {
+      messenger.showSnackBar(
+        const SnackBar(content: Text('Cannot connect this spouse (rules blocked).')),
+      );
+      return;
+    }
+
+    setState(() => _hoveredNodeId = spouseId);
+    _preserveLayoutPositionsAfterRelayout(beforePositions);
   }
 
   Future<void> _logout() async {
@@ -1185,6 +1316,11 @@ Future<void> _handleLivingDeceasedAction(int nodeId) async {
 
   Future<void> _addStandaloneMemberFlow() async {
     if (!await _requireLogin()) return;
+
+    // Capture where the user is currently looking before the drawer opens.
+    // The new standalone member will be placed here after it is created.
+    final targetSceneCenter = _currentViewportSceneCenter();
+
     final r = await _openMemberFormDrawer(
       title: 'Add Member Info',
       showNameField: true,
@@ -1225,7 +1361,7 @@ Future<void> _handleLivingDeceasedAction(int nodeId) async {
       photoBytes: null,
       barangay: r.details.barangay,
       city: r.details.city,
-      province: r.details.province,  
+      province: r.details.province,
       phone: r.details.phone,
       company: r.details.company,
       jobTitle: r.details.jobTitle,
@@ -1235,15 +1371,12 @@ Future<void> _handleLivingDeceasedAction(int nodeId) async {
       tiktok: r.details.tiktok,
     );
 
-    // Wait two frames: first for the store to notify and trigger a build,
-    // second for the layout to compute the new node's position so _focusNode
-    // can find it in _lastLayoutScene.
+    // Force one rebuild so _lastLayoutScene contains the new node.
+    setState(() => _hoveredNodeId = newNode.id);
+
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (!mounted) return;
-        _focusNode(newNode.id);
-      });
+      _placeNodeAtSceneCenter(newNode.id, targetSceneCenter);
     });
   }
 
@@ -1693,56 +1826,73 @@ Future<void> _showDetailsPopup({
                   ],
                 ),
                 const SizedBox(height: 16),
-                Wrap(
-                  spacing: 10,
-                  runSpacing: 10,
+                Column(
+                  mainAxisSize: MainAxisSize.min,
                   children: [
                     _PopupActionButton(
-                      icon: Icons.badge_outlined,
                       label: 'Edit Details',
                       color: _TreeGreenTheme.actionBlue,
+                      width: 280,
                       onTap: () => Navigator.pop(context, 'details'),
                     ),
-                    _PopupActionButton(
-                      icon: Icons.favorite,
-                      label: 'Add Spouse',
-                      color: _TreeGreenTheme.actionPink,
-                      enabled: node.spouses.isEmpty,
-                      onTap: () => Navigator.pop(context, 'spouse'),
+                    const SizedBox(height: 10),
+                    Wrap(
+                      spacing: 10,
+                      runSpacing: 10,
+                      children: [
+                        _PopupActionButton(
+                          label: 'Add Parent',
+                          color: _TreeGreenTheme.actionPurple,
+                          enabled: node.parents.length < 2,
+                          onTap: () => Navigator.pop(context, 'parent'),
+                        ),
+                        _PopupActionButton(
+                          label: 'Connect Parent',
+                          color: _TreeGreenTheme.actionPurple,
+                          enabled: node.parents.length < 2,
+                          onTap: () => Navigator.pop(context, 'connect_parent'),
+                        ),
+                        _PopupActionButton(
+                          label: 'Add Spouse',
+                          color: _TreeGreenTheme.actionPink,
+                          enabled: node.spouses.isEmpty,
+                          onTap: () => Navigator.pop(context, 'spouse'),
+                        ),
+                        _PopupActionButton(
+                          label: 'Connect Spouse',
+                          color: _TreeGreenTheme.actionPink,
+                          enabled: node.spouses.isEmpty,
+                          onTap: () => Navigator.pop(context, 'connect_spouse'),
+                        ),
+                        _PopupActionButton(
+                          label: 'Add Son',
+                          color: _TreeGreenTheme.actionTeal,
+                          onTap: () => Navigator.pop(context, 'son'),
+                        ),
+                        _PopupActionButton(
+                          label: 'Add Daughter',
+                          color: _TreeGreenTheme.actionTeal,
+                          onTap: () => Navigator.pop(context, 'daughter'),
+                        ),
+                        _PopupActionButton(
+                          label: 'Connect Child',
+                          color: _TreeGreenTheme.actionTeal,
+                          onTap: () => Navigator.pop(context, 'connect_child'),
+                        ),
+                        _PopupActionButton(
+                          label: node.isDeceased ? 'Living' : 'Deceased',
+                          color: node.isDeceased
+                              ? _TreeGreenTheme.actionTeal
+                              : const Color(0xFF7A7A8C),
+                          onTap: () => Navigator.pop(context, 'deceased'),
+                        ),
+                      ],
                     ),
+                    const SizedBox(height: 10),
                     _PopupActionButton(
-                      icon: Icons.person,
-                      label: 'Add Parent',
-                      color: _TreeGreenTheme.actionPurple,
-                      enabled: node.parents.length < 2,
-                      onTap: () => Navigator.pop(context, 'parent'),
-                    ),
-                    _PopupActionButton(
-                      icon: Icons.boy,
-                      label: 'Add Son',
-                      color: _TreeGreenTheme.actionTeal,
-                      onTap: () => Navigator.pop(context, 'son'),
-                    ),
-                    _PopupActionButton(
-                      icon: Icons.girl,
-                      label: 'Add Daughter',
-                      color: _TreeGreenTheme.actionTeal,
-                      onTap: () => Navigator.pop(context, 'daughter'),
-                    ),
-                    _PopupActionButton(
-                      icon: node.isDeceased
-                          ? Icons.favorite_outlined
-                          : Icons.sentiment_very_dissatisfied_outlined,
-                      label: node.isDeceased ? 'Living' : 'Deceased',
-                      color: node.isDeceased
-                          ? _TreeGreenTheme.actionTeal
-                          : const Color(0xFF7A7A8C),
-                      onTap: () => Navigator.pop(context, 'deceased'),
-                    ),
-                    _PopupActionButton(
-                      icon: Icons.delete,
                       label: 'Delete',
                       color: Colors.red,
+                      width: 280,
                       onTap: () => Navigator.pop(context, 'delete'),
                     ),
                   ],
@@ -1763,14 +1913,23 @@ Future<void> _showDetailsPopup({
       case 'spouse':
         await _addSpouseFlow(personId: nodeId);
         break;
+      case 'connect_spouse':
+        await _connectExistingSpouseFlow(personId: nodeId);
+        break;
       case 'parent':
         await _addParentFlow(personId: nodeId);
+        break;
+      case 'connect_parent':
+        await _connectExistingParentFlow(personId: nodeId);
         break;
       case 'son':
         await _addSonFlow(fromNodeId: nodeId);
         break;
       case 'daughter':
         await _addDaughterFlow(fromNodeId: nodeId);
+        break;
+      case 'connect_child':
+        await _connectExistingChildFlow(parentId: nodeId);
         break;
       case 'deceased':
         await _handleLivingDeceasedAction(nodeId);
@@ -1987,67 +2146,6 @@ Future<void> _showDetailsPopup({
     });
   }
 
-  Future<void> _addChildFlow({required int fromNodeId}) async {
-    final r = await _openMemberFormDrawer(
-      title: 'Add Child Info',
-      showNameField: true,
-      initialName: 'New Child',
-      initialGender: Gender.female,
-      allowedGenders: const [Gender.female, Gender.male],
-      allowRemovePhoto: false,
-      allowClearBirthday: true,
-    );
-    if (!mounted || !r.saved) return;
-
-    final firstName = (r.firstName ?? '').trim();
-    final lastName = (r.lastName ?? '').trim();
-    final name = r.displayName.trim();
-    if (firstName.isEmpty || lastName.isEmpty || name.isEmpty) return;
-
-    final existingId = _findNodeByExactName(name);
-    if (existingId != null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('$name already exists. Redirecting...')),
-      );
-      _focusNode(existingId);
-      return;
-    }
-
-    final photoUrl = await _uploadPhotoIfNeeded(r.newPhotoBytes, 'child');
-    if (!mounted) return;
-
-    final child = store.addChild(
-      fromNodeId: fromNodeId,
-      name: name,
-      firstName: firstName,
-      middleName: r.middleName,
-      lastName: lastName,
-      nickname: r.nickname,
-      childGender: r.gender,
-      birthday: r.clearBirthday ? null : r.birthday,
-      photoUrl: photoUrl,
-      photoBytes: null,
-      barangay: r.details.barangay,
-      city: r.details.city,
-      province: r.details.province,
-      phone: r.details.phone,
-      company: r.details.company,
-      jobTitle: r.details.jobTitle,
-      fb: r.details.fb,
-      ig: r.details.ig,
-      xAccount: r.details.xAccount,
-      tiktok: r.details.tiktok,
-    );
-
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      _placeNear(
-        child.id,
-        fromNodeId,
-        Offset(0, cardSize.height + 40),
-      );
-    });
-  }
-
   Future<void> _addSonFlow({required int fromNodeId}) async {
     await _addChildWithGender(
       fromNodeId: fromNodeId,
@@ -2213,7 +2311,6 @@ Future<void> _showDetailsPopup({
                 GestureDetector(
                   behavior: HitTestBehavior.translucent,
                   onTapDown: (_) {
-                    if (_isLinking) return;
                     if (_ctrlPressed) return;
                     _clearCtrlSelection();
                   },
@@ -2257,14 +2354,12 @@ Future<void> _showDetailsPopup({
                               size: cardSize,
                               isSelected: _ctrlSelectedIds.contains(entry.key),
                               isHovered: _ctrlSelectedIds.contains(entry.key) ||
-                                  entry.key == _hoveredNodeId ||
-                                  (_isLinking && _linkFromNodeId == entry.key),
+                                  entry.key == _hoveredNodeId,
                               // Mark nodes as dragging: the dragged node itself, plus any ctrl-selected
                               // When isDragging=true, AnimatedPositioned uses Duration.zero for instant updates
                               isDragging: _draggingNodeId != null &&
                                   (_ctrlSelectedIds.contains(entry.key) || _draggingNodeId == entry.key),
-                              dragEnabled: !_isLinking && !_previewMode,
-                              showPortsEnabled: !_previewMode && store.canEditNodeId(entry.key),
+                              dragEnabled: !_previewMode,
                               onHoverChanged: (hovering) {
                                 if (!mounted) return;
                                 setState(() {
@@ -2283,8 +2378,6 @@ Future<void> _showDetailsPopup({
                                   );
                                   return;
                                 }
-
-                                if (_isLinking) return;
 
                                 if (_ctrlPressed) {
                                   _toggleCtrlSelect(id);
@@ -2307,7 +2400,6 @@ Future<void> _showDetailsPopup({
                               },
                               dragOverlayNotifier: _dragOverlayNotifier,
                               onDragStart: () {
-                                if (_isLinking) return;
                                 // Mark as dragging — only triggers one setState here
                                 setState(() => _draggingNodeId = entry.key);
                                 if (_ctrlPressed && !_ctrlSelectedIds.contains(entry.key)) {
@@ -2319,7 +2411,6 @@ Future<void> _showDetailsPopup({
                                 setState(() => _draggingNodeId = null);
                               },
                               onDragAccumulated: (totalDelta) {
-                                if (_isLinking) return;
                                 final draggedId = entry.key;
 
                                 // Handle single vs. multiple selected nodes
@@ -2335,32 +2426,6 @@ Future<void> _showDetailsPopup({
                                   store.addManualOffsetBulk(ids, totalDelta);
                                 }
                               },
-                              onStartPortDrag: (port, globalStart) {
-                                final topLeft = layout[entry.key]!;
-                                final startScene = switch (port) {
-                                  LinkPort.parentTop =>
-                                    Offset(topLeft.dx + cardSize.width / 2, topLeft.dy),
-                                  LinkPort.childBottom => Offset(
-                                      topLeft.dx + cardSize.width / 2,
-                                      topLeft.dy + cardSize.height,
-                                    ),
-                                  LinkPort.spouseLeft =>
-                                    Offset(topLeft.dx, topLeft.dy + cardSize.height / 2),
-                                  LinkPort.spouseRight => Offset(
-                                      topLeft.dx + cardSize.width,
-                                      topLeft.dy + cardSize.height / 2,
-                                    ),
-                                };
-                                _startLink(
-                                  fromNodeId: entry.key,
-                                  port: port,
-                                  startScene: startScene,
-                                  startViewport: _globalToViewport(globalStart),
-                                );
-                              },
-                              onUpdatePortDrag: (g) => _updateLink(_globalToViewport(g)),
-                              onEndPortDrag: (g) => _endLink(_globalToViewport(g)),
-                              onTapPort: _handlePortTap,
                             ),
                         ],
                       ),
@@ -2368,20 +2433,6 @@ Future<void> _showDetailsPopup({
                   ),
                 ),
 
-                // Link dragging preview
-                if (_isLinking)
-                  Positioned.fill(
-                    child: IgnorePointer(
-                      child: CustomPaint(
-                        painter: LinkPreviewPainter(
-                          start: _sceneToViewport(_linkStartScene),
-                          end: _hoverTargetId != null
-                              ? _snappedEndViewport
-                              : _linkCurrentViewport,
-                        ),
-                      ),
-                    ),
-                  ),
 
                 // Loading / Empty state
                 if (_isLoading)
@@ -3353,16 +3404,11 @@ class AnimatedNode extends StatefulWidget {
     required this.onDragStart,
     required this.onDragEnd,
     this.dragOverlayNotifier,
-    required this.onStartPortDrag,
-    required this.onUpdatePortDrag,
-    required this.onEndPortDrag,
-    required this.onTapPort,
     required this.isHovered,
     required this.isSelected,
     required this.isDragging,
     required this.onHoverChanged,
     required this.dragEnabled,
-    required this.showPortsEnabled,
   });
 
   final FamilyNode node;
@@ -3382,26 +3428,17 @@ class AnimatedNode extends StatefulWidget {
   /// follow the dragged node without rebuilding anything else.
   final ValueNotifier<Map<int, Offset>>? dragOverlayNotifier;
 
-  final void Function(LinkPort port, Offset globalStart) onStartPortDrag;
-  final void Function(Offset globalPos) onUpdatePortDrag;
-  final void Function(Offset globalPos) onEndPortDrag;
-
-  final void Function(int nodeId, LinkPort port) onTapPort;
-
   final bool isHovered;
   final bool isSelected;
   final bool isDragging;
   final ValueChanged<bool> onHoverChanged;
   final bool dragEnabled;
-  final bool showPortsEnabled;
 
   @override
   State<AnimatedNode> createState() => _AnimatedNodeState();
 }
 
 class _AnimatedNodeState extends State<AnimatedNode> {
-  Offset? _hoverLocal;
-
   // Per-node position notifier: only the Positioned widget listens to this,
   // so moving a node costs zero rebuilds of its children or siblings.
   late final ValueNotifier<Offset> _posNotifier =
@@ -3475,11 +3512,7 @@ class _AnimatedNodeState extends State<AnimatedNode> {
       // `child` is built once and reused — MemberCard never rebuilds during drag.
       child: MouseRegion(
         onEnter: (_) => widget.onHoverChanged(true),
-        onExit: (_) {
-          setState(() => _hoverLocal = null);
-          widget.onHoverChanged(false);
-        },
-        onHover: (e) => setState(() => _hoverLocal = e.localPosition),
+        onExit: (_) => widget.onHoverChanged(false),
         child: AnimatedScale(
           duration: const Duration(milliseconds: 180),
           curve: Curves.easeOutCubic,
@@ -3507,14 +3540,8 @@ class _AnimatedNodeState extends State<AnimatedNode> {
               onPanEnd:   widget.dragEnabled ? _onPanEnd   : null,
               child: MemberCard(
                 node: widget.node,
-                showPorts: widget.isHovered && widget.showPortsEnabled,
-                hoverLocal: _hoverLocal,
                 size: widget.size,
                 isSelected: widget.isSelected,
-                onStartPortDrag: widget.onStartPortDrag,
-                onUpdatePortDrag: widget.onUpdatePortDrag,
-                onEndPortDrag: widget.onEndPortDrag,
-                onTapPort: widget.onTapPort,
               ),
             ),
           ),
@@ -3535,78 +3562,17 @@ class MemberCard extends StatelessWidget {
   const MemberCard({
     super.key,
     required this.node,
-    required this.showPorts,
-    required this.hoverLocal,
     required this.size,
     required this.isSelected,
-    required this.onStartPortDrag,
-    required this.onUpdatePortDrag,
-    required this.onEndPortDrag,
-    required this.onTapPort,
   });
 
   final FamilyNode node;
-  final bool showPorts;
-  final Offset? hoverLocal;
   final Size size;
   final bool isSelected;
 
-  final void Function(LinkPort port, Offset globalStart) onStartPortDrag;
-  final void Function(Offset globalPos) onUpdatePortDrag;
-  final void Function(Offset globalPos) onEndPortDrag;
-  final void Function(int nodeId, LinkPort port) onTapPort;
-
-  bool get _canShowParent => showPorts && node.parents.length < 2;
-  bool get _canShowChild => showPorts;
-  bool get _canShowSpouse => showPorts && node.spouses.isEmpty;
-
-  static const double _edgeThreshold = 26.0;
-
-  LinkPort? _nearestAllowedPort() {
-    if (!showPorts) return null;
-    final p = hoverLocal;
-    if (p == null) return null;
-
-    final w = size.width;
-    final h = size.height;
-
-    final dTop = p.dy;
-    final dBottom = (h - p.dy).abs();
-    final dLeft = p.dx;
-    final dRight = (w - p.dx).abs();
-
-    final minDist = [dTop, dBottom, dLeft, dRight].reduce(min);
-    if (minDist > _edgeThreshold) return null;
-
-    final candidates = <(LinkPort port, double dist)>[
-      (LinkPort.parentTop, dTop),
-      (LinkPort.childBottom, dBottom),
-      (LinkPort.spouseLeft, dLeft),
-      (LinkPort.spouseRight, dRight),
-    ]..sort((a, b) => a.$2.compareTo(b.$2));
-
-    for (final c in candidates) {
-      switch (c.$1) {
-        case LinkPort.parentTop:
-          if (_canShowParent) return c.$1;
-          break;
-        case LinkPort.childBottom:
-          if (_canShowChild) return c.$1;
-          break;
-        case LinkPort.spouseLeft:
-        case LinkPort.spouseRight:
-          if (_canShowSpouse) return c.$1;
-          break;
-      }
-    }
-
-    return null;
-  }
 
   @override
   Widget build(BuildContext context) {
-    final activePort = showPorts ? _nearestAllowedPort() : null;
-
     return Container(
       decoration: BoxDecoration(
         borderRadius: BorderRadius.circular(16),
@@ -3620,23 +3586,6 @@ class MemberCard extends StatelessWidget {
         child: Stack(
           clipBehavior: Clip.none,
           children: [
-            // Deceased cross badge — top-right corner
-            if (node.isDeceased)
-              Positioned(
-                top: 6,
-                right: 8,
-                child: Tooltip(
-                  message: 'Deceased',
-                  child: Text(
-                    '✝',
-                    style: TextStyle(
-                      fontSize: 13,
-                      color: Colors.grey.shade500,
-                      fontWeight: FontWeight.w700,
-                    ),
-                  ),
-                ),
-              ),
             InkWell(
               borderRadius: BorderRadius.circular(16),
               child: Padding(
@@ -3669,10 +3618,26 @@ class MemberCard extends StatelessWidget {
                             Row(
                               crossAxisAlignment: CrossAxisAlignment.center,
                               children: [
-                                Icon(
-                                  node.isDeceased ? Icons.favorite_outlined : Icons.cake,
-                                  size: 14,
-                                  color: _TreeGreenTheme.textMuted,
+                                SizedBox(
+                                  width: 14,
+                                  height: 14,
+                                  child: Center(
+                                    child: node.isDeceased
+                                        ? Text(
+                                            '✝',
+                                            style: TextStyle(
+                                              fontSize: 13,
+                                              height: 1,
+                                              color: _TreeGreenTheme.textMuted,
+                                              fontWeight: FontWeight.w700,
+                                            ),
+                                          )
+                                        : const Icon(
+                                            Icons.cake,
+                                            size: 14,
+                                            color: _TreeGreenTheme.textMuted,
+                                          ),
+                                  ),
                                 ),
                                 const SizedBox(width: 4),
                                 Expanded(
@@ -3698,54 +3663,6 @@ class MemberCard extends StatelessWidget {
                 ),
               ),
             ),
-            if (activePort == LinkPort.parentTop)
-              Positioned(
-                top: -10,
-                left: (size.width / 2) - 10,
-                child: PlusPort(
-                  tooltip: 'Add Parent',
-                  onTap: () => onTapPort(node.id, LinkPort.parentTop),
-                  onStart: (g) => onStartPortDrag(LinkPort.parentTop, g),
-                  onUpdate: onUpdatePortDrag,
-                  onEnd: onEndPortDrag,
-                ),
-              ),
-            if (activePort == LinkPort.childBottom)
-              Positioned(
-                bottom: -10,
-                left: (size.width / 2) - 10,
-                child: PlusPort(
-                  tooltip: 'Add Child',
-                  onTap: () => onTapPort(node.id, LinkPort.childBottom),
-                  onStart: (g) => onStartPortDrag(LinkPort.childBottom, g),
-                  onUpdate: onUpdatePortDrag,
-                  onEnd: onEndPortDrag,
-                ),
-              ),
-            if (activePort == LinkPort.spouseLeft)
-              Positioned(
-                left: -10,
-                top: (size.height / 2) - 10,
-                child: PlusPort(
-                  tooltip: 'Add Spouse',
-                  onTap: () => onTapPort(node.id, LinkPort.spouseLeft),
-                  onStart: (g) => onStartPortDrag(LinkPort.spouseLeft, g),
-                  onUpdate: onUpdatePortDrag,
-                  onEnd: onEndPortDrag,
-                ),
-              ),
-            if (activePort == LinkPort.spouseRight)
-              Positioned(
-                right: -10,
-                top: (size.height / 2) - 10,
-                child: PlusPort(
-                  tooltip: 'Add Spouse',
-                  onTap: () => onTapPort(node.id, LinkPort.spouseRight),
-                  onStart: (g) => onStartPortDrag(LinkPort.spouseRight, g),
-                  onUpdate: onUpdatePortDrag,
-                  onEnd: onEndPortDrag,
-                ),
-              ),
           ],
         ),
       ),
@@ -3755,18 +3672,18 @@ class MemberCard extends StatelessWidget {
 
 class _PopupActionButton extends StatelessWidget {
   const _PopupActionButton({
-    required this.icon,
     required this.label,
     required this.color,
     required this.onTap,
     this.enabled = true,
+    this.width = 135,
   });
 
-  final IconData icon;
   final String label;
   final Color color;
   final VoidCallback onTap;
   final bool enabled;
+  final double width;
 
   @override
   Widget build(BuildContext context) {
@@ -3790,7 +3707,7 @@ class _PopupActionButton extends StatelessWidget {
       onTap: enabled ? onTap : null,
       borderRadius: BorderRadius.circular(16),
       child: Container(
-        width: 135,
+        width: width,
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
         decoration: BoxDecoration(
           color: bg,
@@ -3799,55 +3716,19 @@ class _PopupActionButton extends StatelessWidget {
             color: enabled ? buttonColor.withAlpha(51) : const Color(0xFFD0D0D0),
           ),
         ),
-        child: Row(
-          children: [
-            Icon(icon, color: fg, size: 18),
-            const SizedBox(width: 8),
-            Expanded(
-              child: Text(
-                label,
-                style: TextStyle(
-                  color: fg,
-                  fontWeight: FontWeight.w600,
-                  fontSize: 13,
-                ),
-              ),
+        child: Center(
+          child: Text(
+            label,
+            textAlign: TextAlign.center,
+            style: TextStyle(
+              color: fg,
+              fontWeight: FontWeight.w600,
+              fontSize: 13,
             ),
-          ],
+          ),
         ),
       ),
     );
-  }
-}
-
-class LinkPreviewPainter extends CustomPainter {
-  LinkPreviewPainter({required this.start, required this.end});
-
-  final Offset start;
-  final Offset end;
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    final paint = Paint()
-      ..color = _TreeGreenTheme.accent
-      ..strokeWidth = 2
-      ..style = PaintingStyle.stroke
-      ..strokeCap = StrokeCap.round;
-
-    final mid = Offset((start.dx + end.dx) / 2, (start.dy + end.dy) / 2);
-    final ctrl = Offset(mid.dx, min(start.dy, end.dy) - 40);
-
-    final path = Path()
-      ..moveTo(start.dx, start.dy)
-      ..quadraticBezierTo(ctrl.dx, ctrl.dy, end.dx, end.dy);
-
-    canvas.drawPath(path, paint);
-    canvas.drawCircle(end, 4.5, Paint()..color = _TreeGreenTheme.accent);
-  }
-
-  @override
-  bool shouldRepaint(covariant LinkPreviewPainter oldDelegate) {
-    return oldDelegate.start != start || oldDelegate.end != end;
   }
 }
 
