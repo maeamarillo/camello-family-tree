@@ -570,7 +570,10 @@ class FamilyTreeStore extends ChangeNotifier {
 
     final other = getNode(existingOtherParentId);
 
-    if (newParentGender == Gender.female) {
+    // Place new parent to the left of the existing one if female (or same-gender
+    // first added), otherwise to the right.  For same-gender pairs we simply
+    // always put the new one to the right so they don't collide.
+    if (newParentGender == Gender.female && other.gender != Gender.female) {
       return min(other.slotX, person.slotX) - 1;
     } else {
       return max(other.slotX, person.slotX) + 1;
@@ -586,11 +589,9 @@ class FamilyTreeStore extends ChangeNotifier {
 
     for (final childId in otherParent.children) {
       if (!_nodes.containsKey(childId)) continue;
-      final (femaleP, maleP) = parentPairForPerson(childId);
 
       if (childId == newParentId) continue;
-      if (newParentGender == Gender.female && femaleP != null) continue;
-      if (newParentGender == Gender.male && maleP != null) continue;
+      if (getNode(childId).parents.length >= 2) continue;
 
       linkParentChild(parentId: newParentId, childId: childId, notify: false);
     }
@@ -953,10 +954,15 @@ class FamilyTreeStore extends ChangeNotifier {
     if (person.parents.length >= 2) return null;
 
     final (femaleP, maleP) = parentPairForPerson(personId);
-    if (parentGender == Gender.female && femaleP != null) return null;
-    if (parentGender == Gender.male && maleP != null) return null;
 
-    final otherParentId = parentGender == Gender.female ? maleP : femaleP;
+    // For same-gender parents, pick the existing parent of either gender as
+    // the "other" for slot/linking purposes (first one found, if any).
+    final int? otherParentId;
+    if (parentGender == Gender.female) {
+      otherParentId = maleP ?? (femaleP);
+    } else {
+      otherParentId = femaleP ?? (maleP);
+    }
     // No ownership check on otherParentId — linking alongside a foreign-owned
     // parent is a shared graph operation, not an edit of that parent node.
 
@@ -1126,10 +1132,6 @@ class FamilyTreeStore extends ChangeNotifier {
 
     if (child.parents.length >= 2) return false;
 
-    final (femaleP, maleP) = parentPairForPerson(childId);
-    if (parent.gender == Gender.female && femaleP != null) return false;
-    if (parent.gender == Gender.male && maleP != null) return false;
-
     linkParentChild(parentId: parentId, childId: childId, notify: false);
 
     child.levelY = parent.levelY + 1;
@@ -1156,7 +1158,6 @@ class FamilyTreeStore extends ChangeNotifier {
     final b = getNode(bId);
 
     if (a.spouses.isNotEmpty || b.spouses.isNotEmpty) return false;
-    if (a.gender == b.gender) return false;
 
     linkSpouses(aId: aId, bId: bId, notify: false);
 

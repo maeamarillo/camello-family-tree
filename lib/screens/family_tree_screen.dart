@@ -837,13 +837,43 @@ class _FamilyTreeScreenState extends State<FamilyTreeScreen> {
     }
   }
 
-  void _preserveLayoutPositionsAfterRelayout(Map<int, Offset> beforePositions) {
+  Set<int> _collectConnectedFamilyIds(int rootId) {
+    final visited = <int>{};
+    final queue = <int>[rootId];
+
+    while (queue.isNotEmpty) {
+      final id = queue.removeAt(0);
+      if (!visited.add(id)) continue;
+
+      final node = store.nodes[id];
+      if (node == null) continue;
+
+      for (final nextId in <int>{
+        ...node.parents,
+        ...node.children,
+        ...node.spouses,
+      }) {
+        if (!visited.contains(nextId) && store.nodes.containsKey(nextId)) {
+          queue.add(nextId);
+        }
+      }
+    }
+
+    return visited;
+  }
+
+  void _preserveLayoutPositionsAfterRelayout(
+    Map<int, Offset> beforePositions, {
+    Set<int> exceptIds = const <int>{},
+  }) {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
 
       final afterPositions = Map<int, Offset>.from(_lastLayoutScene);
 
       for (final id in beforePositions.keys) {
+        if (exceptIds.contains(id)) continue;
+
         final before = beforePositions[id];
         final after = afterPositions[id];
         if (before == null || after == null) continue;
@@ -852,6 +882,55 @@ class _FamilyTreeScreenState extends State<FamilyTreeScreen> {
         if (delta.distance > 0.5) {
           store.addManualOffset(id, delta);
         }
+      }
+    });
+  }
+
+  void _placeConnectedMemberLikeNewAfterRelayout({
+    required Map<int, Offset> beforePositions,
+    required Set<int> movingIds,
+    required int movingRootId,
+    required int anchorId,
+    required Offset offset,
+  }) {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+
+      final afterPositions = Map<int, Offset>.from(_lastLayoutScene);
+
+      // Keep everyone else where they were before the relationship relayout.
+      for (final id in beforePositions.keys) {
+        if (movingIds.contains(id)) continue;
+
+        final before = beforePositions[id];
+        final after = afterPositions[id];
+        if (before == null || after == null) continue;
+
+        final delta = before - after;
+        if (delta.distance > 0.5) {
+          store.addManualOffset(id, delta);
+        }
+      }
+
+      // Then move the connected member/component to the same relative spot
+      // used by Add Parent / Add Son / Add Daughter.
+      final anchorPos = beforePositions[anchorId] ?? afterPositions[anchorId];
+      final movingRootPos = afterPositions[movingRootId];
+      if (anchorPos == null || movingRootPos == null) return;
+
+      final idsToMove = movingIds
+          .where((id) => id != anchorId && afterPositions.containsKey(id))
+          .toSet();
+      if (idsToMove.isEmpty) return;
+
+      final desiredRootPos = anchorPos + offset;
+      final delta = desiredRootPos - movingRootPos;
+      if (delta.distance <= 0.5) return;
+
+      if (idsToMove.length == 1) {
+        store.addManualOffset(idsToMove.first, delta);
+      } else {
+        store.addManualOffsetBulk(idsToMove, delta);
       }
     });
   }
@@ -871,16 +950,9 @@ class _FamilyTreeScreenState extends State<FamilyTreeScreen> {
       return;
     }
 
-    final (femaleParent, maleParent) = store.parentPairForPerson(personId);
-    final allowedGenders = <Gender>{
-      if (femaleParent == null) Gender.female,
-      if (maleParent == null) Gender.male,
-    };
-
     final candidates = store.nodes.values.where((candidate) {
       if (candidate.id == personId) return false;
       if (person.parents.contains(candidate.id)) return false;
-      if (!allowedGenders.contains(candidate.gender)) return false;
       return true;
     }).toList();
 
@@ -893,6 +965,9 @@ class _FamilyTreeScreenState extends State<FamilyTreeScreen> {
     if (!mounted || parentId == null) return;
 
     final beforePositions = Map<int, Offset>.from(_lastLayoutScene);
+    final movingIds = _collectConnectedFamilyIds(parentId)..remove(personId);
+    if (movingIds.isEmpty) movingIds.add(parentId);
+
     final ok = store.tryLinkExistingParent(
       parentId: parentId,
       childId: personId,
@@ -906,7 +981,13 @@ class _FamilyTreeScreenState extends State<FamilyTreeScreen> {
     }
 
     setState(() => _hoveredNodeId = parentId);
-    _preserveLayoutPositionsAfterRelayout(beforePositions);
+    _placeConnectedMemberLikeNewAfterRelayout(
+      beforePositions: beforePositions,
+      movingIds: movingIds,
+      movingRootId: parentId,
+      anchorId: personId,
+      offset: Offset(0, -(cardSize.height + 40)),
+    );
   }
 
   Future<void> _connectExistingChildFlow({required int parentId}) async {
@@ -933,6 +1014,9 @@ class _FamilyTreeScreenState extends State<FamilyTreeScreen> {
     if (!mounted || childId == null) return;
 
     final beforePositions = Map<int, Offset>.from(_lastLayoutScene);
+    final movingIds = _collectConnectedFamilyIds(childId)..remove(parentId);
+    if (movingIds.isEmpty) movingIds.add(childId);
+
     final ok = store.tryLinkExistingChild(
       parentId: parentId,
       childId: childId,
@@ -946,7 +1030,13 @@ class _FamilyTreeScreenState extends State<FamilyTreeScreen> {
     }
 
     setState(() => _hoveredNodeId = childId);
-    _preserveLayoutPositionsAfterRelayout(beforePositions);
+    _placeConnectedMemberLikeNewAfterRelayout(
+      beforePositions: beforePositions,
+      movingIds: movingIds,
+      movingRootId: childId,
+      anchorId: parentId,
+      offset: Offset(0, cardSize.height + 40),
+    );
   }
 
   Future<void> _connectExistingSpouseFlow({required int personId}) async {
@@ -966,7 +1056,6 @@ class _FamilyTreeScreenState extends State<FamilyTreeScreen> {
 
     final candidates = store.nodes.values.where((candidate) {
       if (candidate.id == personId) return false;
-      if (candidate.gender != person.gender.opposite) return false;
       if (candidate.spouses.isNotEmpty) return false;
       return true;
     }).toList();
@@ -979,6 +1068,8 @@ class _FamilyTreeScreenState extends State<FamilyTreeScreen> {
 
     if (!mounted || spouseId == null) return;
 
+    final originalPersonGender = person.gender;
+    final originalSpouseGender = store.getNode(spouseId).gender;
     final beforePositions = Map<int, Offset>.from(_lastLayoutScene);
     final ok = store.tryLinkExistingSpouses(
       aId: personId,
@@ -991,6 +1082,11 @@ class _FamilyTreeScreenState extends State<FamilyTreeScreen> {
       );
       return;
     }
+
+    // Keep both members' chosen genders. Spouse links should not auto-flip
+    // either person to the opposite gender.
+    store.setGender(personId, originalPersonGender);
+    store.setGender(spouseId, originalSpouseGender);
 
     setState(() => _hoveredNodeId = spouseId);
     _preserveLayoutPositionsAfterRelayout(beforePositions);
@@ -1998,14 +2094,12 @@ Future<void> _showDetailsPopup({
       return;
     }
 
-    final spouseGender = person.gender.opposite;
-
     final r = await _openMemberFormDrawer(
       title: 'Add Spouse Info',
       showNameField: true,
       initialName: 'New Spouse',
-      initialGender: spouseGender,
-      allowedGenders: [spouseGender],
+      initialGender: person.gender,
+      allowedGenders: const [Gender.female, Gender.male],
       allowRemovePhoto: false,
       allowClearBirthday: true,
     );
@@ -2058,6 +2152,10 @@ Future<void> _showDetailsPopup({
       return;
     }
 
+    // Keep the gender selected in the form. Some store implementations create
+    // spouses as the opposite gender by default, so overwrite it here.
+    store.setGender(added.id, r.gender);
+
     WidgetsBinding.instance.addPostFrameCallback((_) {
       final person = store.getNode(personId);
       final isMale = person.gender == Gender.male;
@@ -2083,19 +2181,7 @@ Future<void> _showDetailsPopup({
       return;
     }
 
-    final (femaleP, maleP) = store.parentPairForPerson(personId);
-
-    final options = <Gender>[
-      if (femaleP == null) Gender.female,
-      if (maleP == null) Gender.male,
-    ];
-
-    if (options.isEmpty) {
-      messenger.showSnackBar(
-        SnackBar(content: Text('${person.name} already has 2 parents.')),
-      );
-      return;
-    }
+    const options = <Gender>[Gender.female, Gender.male];
 
     final r = await _openMemberFormDrawer(
       title: 'Add Parent Info',
@@ -3891,12 +3977,10 @@ class ConnectorPainter extends CustomPainter {
       if (child.parents.isEmpty) continue;
       if (!positions.containsKey(child.id)) continue;
 
-      final (femaleP, maleP) = store.parentPairForPerson(child.id);
-
-      final parentIds = <int>[
-        if (femaleP != null) femaleP,
-        if (maleP != null) maleP,
-      ]..sort();
+      final parentIds = child.parents
+          .where((pid) => store.nodes.containsKey(pid))
+          .toList()
+        ..sort();
 
       if (parentIds.length == 1) {
         final onlyParentId = parentIds.first;
