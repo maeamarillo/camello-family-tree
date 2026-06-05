@@ -2510,7 +2510,7 @@ Future<void> _showDetailsPopup({
     _syncingFromController = true;
     _tc.value = Matrix4.identity()
       ..translate(viewportCenter.dx, viewportCenter.dy)
-      ..scale(0.50) // reset zoom to 1.0
+      ..scale(0.45) // reset zoom to 1.0
       ..translate(-nodeCenter.dx, -nodeCenter.dy);
     _syncingFromController = false;
 
