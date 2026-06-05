@@ -418,8 +418,12 @@ class _FamilyTreeScreenState extends State<FamilyTreeScreen> {
 
     final desired = targetPos + offset;
     final delta = desired - newPos;
+    if (delta.distance <= 0.5 || !mounted) return;
 
-    store.addManualOffset(newId, delta);
+    setState(() {
+      store.addManualOffset(newId, delta);
+      _hoveredNodeId = newId;
+    });
   }
 
   Future<void> _ensureLoadedFromCloud() async {
@@ -870,6 +874,7 @@ class _FamilyTreeScreenState extends State<FamilyTreeScreen> {
       if (!mounted) return;
 
       final afterPositions = Map<int, Offset>.from(_lastLayoutScene);
+      final deltas = <int, Offset>{};
 
       for (final id in beforePositions.keys) {
         if (exceptIds.contains(id)) continue;
@@ -880,9 +885,17 @@ class _FamilyTreeScreenState extends State<FamilyTreeScreen> {
 
         final delta = before - after;
         if (delta.distance > 0.5) {
-          store.addManualOffset(id, delta);
+          deltas[id] = delta;
         }
       }
+
+      if (deltas.isEmpty || !mounted) return;
+
+      setState(() {
+        for (final entry in deltas.entries) {
+          store.addManualOffset(entry.key, entry.value);
+        }
+      });
     });
   }
 
@@ -897,6 +910,7 @@ class _FamilyTreeScreenState extends State<FamilyTreeScreen> {
       if (!mounted) return;
 
       final afterPositions = Map<int, Offset>.from(_lastLayoutScene);
+      final fixedNodeDeltas = <int, Offset>{};
 
       // Keep everyone else where they were before the relationship relayout.
       for (final id in beforePositions.keys) {
@@ -908,7 +922,7 @@ class _FamilyTreeScreenState extends State<FamilyTreeScreen> {
 
         final delta = before - after;
         if (delta.distance > 0.5) {
-          store.addManualOffset(id, delta);
+          fixedNodeDeltas[id] = delta;
         }
       }
 
@@ -916,22 +930,41 @@ class _FamilyTreeScreenState extends State<FamilyTreeScreen> {
       // used by Add Parent / Add Son / Add Daughter.
       final anchorPos = beforePositions[anchorId] ?? afterPositions[anchorId];
       final movingRootPos = afterPositions[movingRootId];
-      if (anchorPos == null || movingRootPos == null) return;
+      if (anchorPos == null || movingRootPos == null) {
+        if (fixedNodeDeltas.isEmpty || !mounted) return;
+        setState(() {
+          for (final entry in fixedNodeDeltas.entries) {
+            store.addManualOffset(entry.key, entry.value);
+          }
+        });
+        return;
+      }
 
       final idsToMove = movingIds
           .where((id) => id != anchorId && afterPositions.containsKey(id))
           .toSet();
-      if (idsToMove.isEmpty) return;
 
       final desiredRootPos = anchorPos + offset;
-      final delta = desiredRootPos - movingRootPos;
-      if (delta.distance <= 0.5) return;
+      final movingDelta = desiredRootPos - movingRootPos;
 
-      if (idsToMove.length == 1) {
-        store.addManualOffset(idsToMove.first, delta);
-      } else {
-        store.addManualOffsetBulk(idsToMove, delta);
+      if (fixedNodeDeltas.isEmpty &&
+          (idsToMove.isEmpty || movingDelta.distance <= 0.5)) {
+        return;
       }
+
+      setState(() {
+        for (final entry in fixedNodeDeltas.entries) {
+          store.addManualOffset(entry.key, entry.value);
+        }
+
+        if (idsToMove.isNotEmpty && movingDelta.distance > 0.5) {
+          if (idsToMove.length == 1) {
+            store.addManualOffset(idsToMove.first, movingDelta);
+          } else {
+            store.addManualOffsetBulk(idsToMove, movingDelta);
+          }
+        }
+      });
     });
   }
 
@@ -1000,6 +1033,7 @@ class _FamilyTreeScreenState extends State<FamilyTreeScreen> {
       if (!mounted) return;
 
       final afterPositions = Map<int, Offset>.from(_lastLayoutScene);
+      final fixedNodeDeltas = <int, Offset>{};
 
       // Keep existing nodes fixed after the relationship relayout. Only the
       // connected child/component is moved into the existing sibling row.
@@ -1012,18 +1046,26 @@ class _FamilyTreeScreenState extends State<FamilyTreeScreen> {
 
         final delta = before - after;
         if (delta.distance > 0.5) {
-          store.addManualOffset(id, delta);
+          fixedNodeDeltas[id] = delta;
         }
       }
 
       final parentPos = beforePositions[parentId] ?? afterPositions[parentId];
       final childPos = afterPositions[childId];
-      if (parentPos == null || childPos == null) return;
+
+      if (parentPos == null || childPos == null) {
+        if (fixedNodeDeltas.isEmpty || !mounted) return;
+        setState(() {
+          for (final entry in fixedNodeDeltas.entries) {
+            store.addManualOffset(entry.key, entry.value);
+          }
+        });
+        return;
+      }
 
       final idsToMove = movingIds
           .where((id) => id != parentId && afterPositions.containsKey(id))
           .toSet();
-      if (idsToMove.isEmpty) return;
 
       final xStep = cardSize.width + hGap;
 
@@ -1062,14 +1104,26 @@ class _FamilyTreeScreenState extends State<FamilyTreeScreen> {
         );
       }
 
-      final delta = desiredChildPos - childPos;
-      if (delta.distance <= 0.5) return;
+      final movingDelta = desiredChildPos - childPos;
 
-      if (idsToMove.length == 1) {
-        store.addManualOffset(idsToMove.first, delta);
-      } else {
-        store.addManualOffsetBulk(idsToMove, delta);
+      if (fixedNodeDeltas.isEmpty &&
+          (idsToMove.isEmpty || movingDelta.distance <= 0.5)) {
+        return;
       }
+
+      setState(() {
+        for (final entry in fixedNodeDeltas.entries) {
+          store.addManualOffset(entry.key, entry.value);
+        }
+
+        if (idsToMove.isNotEmpty && movingDelta.distance > 0.5) {
+          if (idsToMove.length == 1) {
+            store.addManualOffset(idsToMove.first, movingDelta);
+          } else {
+            store.addManualOffsetBulk(idsToMove, movingDelta);
+          }
+        }
+      });
     });
   }
 
@@ -1106,10 +1160,17 @@ class _FamilyTreeScreenState extends State<FamilyTreeScreen> {
     final movingIds = _collectConnectedFamilyIds(parentId)..remove(personId);
     if (movingIds.isEmpty) movingIds.add(parentId);
 
-    final ok = store.tryLinkExistingParent(
-      parentId: parentId,
-      childId: personId,
-    );
+    bool ok = false;
+    setState(() {
+      ok = store.tryLinkExistingParent(
+        parentId: parentId,
+        childId: personId,
+      );
+
+      if (ok) {
+        _hoveredNodeId = parentId;
+      }
+    });
 
     if (!ok) {
       messenger.showSnackBar(
@@ -1117,8 +1178,6 @@ class _FamilyTreeScreenState extends State<FamilyTreeScreen> {
       );
       return;
     }
-
-    setState(() => _hoveredNodeId = parentId);
     _placeConnectedMemberLikeNewAfterRelayout(
       beforePositions: beforePositions,
       movingIds: movingIds,
@@ -1155,10 +1214,32 @@ class _FamilyTreeScreenState extends State<FamilyTreeScreen> {
     final movingIds = _collectConnectedFamilyIds(childId)..remove(parentId);
     if (movingIds.isEmpty) movingIds.add(childId);
 
-    final ok = store.tryLinkExistingChild(
-      parentId: parentId,
-      childId: childId,
-    );
+    bool ok = false;
+    setState(() {
+      ok = store.tryLinkExistingChild(
+        parentId: parentId,
+        childId: childId,
+      );
+
+      if (ok) {
+        // Match Add Son / Add Daughter behavior: if this parent already has
+        // children with a co-parent, attach that same co-parent to the connected
+        // child too. This is gender-neutral, so same-gender parent pairs are
+        // handled the same as mother/father pairs.
+        final coParentId = _preferredCoParentForConnectedChild(
+          parentId: parentId,
+          childId: childId,
+        );
+        if (coParentId != null) {
+          store.tryLinkExistingChild(
+            parentId: coParentId,
+            childId: childId,
+          );
+        }
+
+        _hoveredNodeId = childId;
+      }
+    });
 
     if (!ok) {
       messenger.showSnackBar(
@@ -1166,23 +1247,6 @@ class _FamilyTreeScreenState extends State<FamilyTreeScreen> {
       );
       return;
     }
-
-    // Match Add Son / Add Daughter behavior: if this parent already has
-    // children with a co-parent, attach that same co-parent to the connected
-    // child too. This is gender-neutral, so same-gender parent pairs are
-    // handled the same as mother/father pairs.
-    final coParentId = _preferredCoParentForConnectedChild(
-      parentId: parentId,
-      childId: childId,
-    );
-    if (coParentId != null) {
-      store.tryLinkExistingChild(
-        parentId: coParentId,
-        childId: childId,
-      );
-    }
-
-    setState(() => _hoveredNodeId = childId);
     _placeConnectedChildWithSiblingsAfterRelayout(
       beforePositions: beforePositions,
       movingIds: movingIds,
@@ -1223,10 +1287,21 @@ class _FamilyTreeScreenState extends State<FamilyTreeScreen> {
     final originalPersonGender = person.gender;
     final originalSpouseGender = store.getNode(spouseId).gender;
     final beforePositions = Map<int, Offset>.from(_lastLayoutScene);
-    final ok = store.tryLinkExistingSpouses(
-      aId: personId,
-      bId: spouseId,
-    );
+    bool ok = false;
+    setState(() {
+      ok = store.tryLinkExistingSpouses(
+        aId: personId,
+        bId: spouseId,
+      );
+
+      if (ok) {
+        // Keep both members' chosen genders. Spouse links should not auto-flip
+        // either person to the opposite gender.
+        store.setGender(personId, originalPersonGender);
+        store.setGender(spouseId, originalSpouseGender);
+        _hoveredNodeId = spouseId;
+      }
+    });
 
     if (!ok) {
       messenger.showSnackBar(
@@ -1234,13 +1309,6 @@ class _FamilyTreeScreenState extends State<FamilyTreeScreen> {
       );
       return;
     }
-
-    // Keep both members' chosen genders. Spouse links should not auto-flip
-    // either person to the opposite gender.
-    store.setGender(personId, originalPersonGender);
-    store.setGender(spouseId, originalSpouseGender);
-
-    setState(() => _hoveredNodeId = spouseId);
     _preserveLayoutPositionsAfterRelayout(beforePositions);
   }
 
@@ -1291,24 +1359,29 @@ Future<void> _applyFormToNode(int nodeId, MemberFormResult r) async {
 
   final newDeathDate = r.clearDeathDate ? null : r.deathDate;
 
-  // 1. Update basic details immediately
-  store.setGender(nodeId, r.gender);
-  store.setDetails(nodeId, r.details);
-  store.setBirthday(nodeId, r.clearBirthday ? null : r.birthday);
-  store.setDeathDate(nodeId, newDeathDate);
-
-  // A filled date of death should automatically mark the member as deceased.
-  // Clearing the date of death should automatically mark the member as living.
-  final afterDeathDateUpdate = store.getNode(nodeId);
-  if (newDeathDate != null && !afterDeathDateUpdate.isDeceased) {
-    store.toggleDeceased(nodeId);
+  // 1. Update basic details immediately and rebuild the card now.
+  setState(() {
+    store.setGender(nodeId, r.gender);
+    store.setDetails(nodeId, r.details);
+    store.setBirthday(nodeId, r.clearBirthday ? null : r.birthday);
     store.setDeathDate(nodeId, newDeathDate);
-  } else if (newDeathDate == null && afterDeathDateUpdate.isDeceased) {
-    store.toggleDeceased(nodeId);
-  }
+
+    // A filled date of death should automatically mark the member as deceased.
+    // Clearing the date of death should automatically mark the member as living.
+    final afterDeathDateUpdate = store.getNode(nodeId);
+    if (newDeathDate != null && !afterDeathDateUpdate.isDeceased) {
+      store.toggleDeceased(nodeId);
+      store.setDeathDate(nodeId, newDeathDate);
+    } else if (newDeathDate == null && afterDeathDateUpdate.isDeceased) {
+      store.toggleDeceased(nodeId);
+    }
+
+    if (r.removePhoto) {
+      store.removePhoto(nodeId);
+    }
+  });
 
   if (r.removePhoto) {
-    store.removePhoto(nodeId);
     return;
   }
 
@@ -1333,7 +1406,9 @@ Future<void> _uploadPhotoBackground(int nodeId, Uint8List bytes) async {
       fileName: 'node_$nodeId.jpg',
     );
     if (mounted) {
-      store.setPhotoUrl(nodeId, photoUrl); // Sync with cloud URL once done
+      setState(() {
+        store.setPhotoUrl(nodeId, photoUrl); // Sync with cloud URL once done
+      });
     }
   } catch (e) {
     debugPrint('Background photo upload failed: $e');
@@ -1551,28 +1626,30 @@ Future<void> _handleLivingDeceasedAction(int nodeId) async {
     final photoUrl = await _uploadPhotoIfNeeded(r.newPhotoBytes, 'member');
     if (!mounted) return;
 
-    store.addRoot(
-      name: name,
-      firstName: firstName,
-      middleName: r.middleName,
-      lastName: lastName,
-      nickname: r.nickname,
-      gender: r.gender,
-      birthday: r.clearBirthday ? null : r.birthday,
-      photoUrl: photoUrl,
-      photoBytes: null,
-      barangay: r.details.barangay,
-      city: r.details.city,
-      province: r.details.province,
-      country: r.details.country,
-      phone: r.details.phone,
-      company: r.details.company,
-      jobTitle: r.details.jobTitle,
-      fb: r.details.fb,
-      ig: r.details.ig,
-      xAccount: r.details.xAccount,
-      tiktok: r.details.tiktok,
-    );
+    setState(() {
+      store.addRoot(
+        name: name,
+        firstName: firstName,
+        middleName: r.middleName,
+        lastName: lastName,
+        nickname: r.nickname,
+        gender: r.gender,
+        birthday: r.clearBirthday ? null : r.birthday,
+        photoUrl: photoUrl,
+        photoBytes: null,
+        barangay: r.details.barangay,
+        city: r.details.city,
+        province: r.details.province,
+        country: r.details.country,
+        phone: r.details.phone,
+        company: r.details.company,
+        jobTitle: r.details.jobTitle,
+        fb: r.details.fb,
+        ig: r.details.ig,
+        xAccount: r.details.xAccount,
+        tiktok: r.details.tiktok,
+      );
+    });
     
   }
 
@@ -1611,35 +1688,37 @@ Future<void> _handleLivingDeceasedAction(int nodeId) async {
     final photoUrl = await _uploadPhotoIfNeeded(r.newPhotoBytes, 'member');
     if (!mounted) return;
 
-    final newNode = store.addStandalone(
-      name: name,
-      firstName: firstName,
-      middleName: r.middleName,
-      lastName: lastName,
-      nickname: r.nickname,
-      gender: r.gender,
-      birthday: r.clearBirthday ? null : r.birthday,
-      photoUrl: photoUrl,
-      photoBytes: null,
-      barangay: r.details.barangay,
-      city: r.details.city,
-      province: r.details.province,
-      country: r.details.country,
-      phone: r.details.phone,
-      company: r.details.company,
-      jobTitle: r.details.jobTitle,
-      fb: r.details.fb,
-      ig: r.details.ig,
-      xAccount: r.details.xAccount,
-      tiktok: r.details.tiktok,
-    );
+    FamilyNode? newNode;
+    setState(() {
+      newNode = store.addStandalone(
+        name: name,
+        firstName: firstName,
+        middleName: r.middleName,
+        lastName: lastName,
+        nickname: r.nickname,
+        gender: r.gender,
+        birthday: r.clearBirthday ? null : r.birthday,
+        photoUrl: photoUrl,
+        photoBytes: null,
+        barangay: r.details.barangay,
+        city: r.details.city,
+        province: r.details.province,
+        country: r.details.country,
+        phone: r.details.phone,
+        company: r.details.company,
+        jobTitle: r.details.jobTitle,
+        fb: r.details.fb,
+        ig: r.details.ig,
+        xAccount: r.details.xAccount,
+        tiktok: r.details.tiktok,
+      );
 
-    // Force one rebuild so _lastLayoutScene contains the new node.
-    setState(() => _hoveredNodeId = newNode.id);
+      _hoveredNodeId = newNode!.id;
+    });
 
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
-      _placeNodeAtSceneCenter(newNode.id, targetSceneCenter);
+      _placeNodeAtSceneCenter(newNode!.id, targetSceneCenter);
     });
   }
 
@@ -2274,28 +2353,38 @@ Future<void> _showDetailsPopup({
     final photoUrl = await _uploadPhotoIfNeeded(r.newPhotoBytes, 'spouse');
     if (!mounted) return;
 
-    final added = store.addSpouse(
-      personId: personId,
-      name: name,
-      firstName: firstName,
-      middleName: r.middleName,
-      lastName: lastName,
-      nickname: r.nickname,
-      birthday: r.clearBirthday ? null : r.birthday,
-      photoUrl: photoUrl,
-      photoBytes: null,
-      barangay: r.details.barangay,
-      city: r.details.city,
-      province: r.details.province,
-      country: r.details.country,
-      phone: r.details.phone,
-      company: r.details.company,
-      jobTitle: r.details.jobTitle,
-      fb: r.details.fb,
-      ig: r.details.ig,
-      xAccount: r.details.xAccount,
-      tiktok: r.details.tiktok,
-    );
+    FamilyNode? added;
+    setState(() {
+      added = store.addSpouse(
+        personId: personId,
+        name: name,
+        firstName: firstName,
+        middleName: r.middleName,
+        lastName: lastName,
+        nickname: r.nickname,
+        birthday: r.clearBirthday ? null : r.birthday,
+        photoUrl: photoUrl,
+        photoBytes: null,
+        barangay: r.details.barangay,
+        city: r.details.city,
+        province: r.details.province,
+        country: r.details.country,
+        phone: r.details.phone,
+        company: r.details.company,
+        jobTitle: r.details.jobTitle,
+        fb: r.details.fb,
+        ig: r.details.ig,
+        xAccount: r.details.xAccount,
+        tiktok: r.details.tiktok,
+      );
+
+      if (added != null) {
+        // Keep the gender selected in the form. Some store implementations create
+        // spouses as the opposite gender by default, so overwrite it here.
+        store.setGender(added!.id, r.gender);
+        _hoveredNodeId = added!.id;
+      }
+    });
 
     if (added == null) {
       messenger.showSnackBar(
@@ -2304,15 +2393,11 @@ Future<void> _showDetailsPopup({
       return;
     }
 
-    // Keep the gender selected in the form. Some store implementations create
-    // spouses as the opposite gender by default, so overwrite it here.
-    store.setGender(added.id, r.gender);
-
     WidgetsBinding.instance.addPostFrameCallback((_) {
       final person = store.getNode(personId);
       final isMale = person.gender == Gender.male;
       _placeNear(
-        added.id,
+        added!.id,
         personId,
         Offset(
           isMale ? cardSize.width + 40 : -(cardSize.width + 40),
@@ -2363,29 +2448,36 @@ Future<void> _showDetailsPopup({
     final photoUrl = await _uploadPhotoIfNeeded(r.newPhotoBytes, 'parent');
     if (!mounted) return;
 
-    final added = store.addParent(
-      personId: personId,
-      parentGender: r.gender,
-      name: name,
-      firstName: firstName,
-      middleName: r.middleName,
-      lastName: lastName,
-      nickname: r.nickname,
-      birthday: r.clearBirthday ? null : r.birthday,
-      photoUrl: photoUrl,
-      photoBytes: null,
-      barangay: r.details.barangay,
-      city: r.details.city,
-      province: r.details.province,
-      country: r.details.country,
-      phone: r.details.phone,
-      company: r.details.company,
-      jobTitle: r.details.jobTitle,
-      fb: r.details.fb,
-      ig: r.details.ig,
-      xAccount: r.details.xAccount,
-      tiktok: r.details.tiktok,
-    );
+    FamilyNode? added;
+    setState(() {
+      added = store.addParent(
+        personId: personId,
+        parentGender: r.gender,
+        name: name,
+        firstName: firstName,
+        middleName: r.middleName,
+        lastName: lastName,
+        nickname: r.nickname,
+        birthday: r.clearBirthday ? null : r.birthday,
+        photoUrl: photoUrl,
+        photoBytes: null,
+        barangay: r.details.barangay,
+        city: r.details.city,
+        province: r.details.province,
+        country: r.details.country,
+        phone: r.details.phone,
+        company: r.details.company,
+        jobTitle: r.details.jobTitle,
+        fb: r.details.fb,
+        ig: r.details.ig,
+        xAccount: r.details.xAccount,
+        tiktok: r.details.tiktok,
+      );
+
+      if (added != null) {
+        _hoveredNodeId = added!.id;
+      }
+    });
 
     if (added == null) {
       messenger.showSnackBar(
@@ -2396,7 +2488,7 @@ Future<void> _showDetailsPopup({
 
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _placeNear(
-        added.id,
+        added!.id,
         personId,
         Offset(0, -(cardSize.height + 40)),
       );
@@ -2453,33 +2545,38 @@ Future<void> _showDetailsPopup({
     final photoUrl = await _uploadPhotoIfNeeded(r.newPhotoBytes, 'child');
     if (!mounted) return;
 
-    final child = store.addChild(
-      fromNodeId: fromNodeId,
-      name: name,
-      firstName: firstName,
-      middleName: r.middleName,
-      lastName: lastName,
-      nickname: r.nickname,
-      childGender: gender,
-      birthday: r.clearBirthday ? null : r.birthday,
-      photoUrl: photoUrl,
-      photoBytes: null,
-      barangay: r.details.barangay,
-      city: r.details.city,
-      province: r.details.province,
-      country: r.details.country,
-      phone: r.details.phone,
-      company: r.details.company,
-      jobTitle: r.details.jobTitle,
-      fb: r.details.fb,
-      ig: r.details.ig,
-      xAccount: r.details.xAccount,
-      tiktok: r.details.tiktok,
-    );
+    FamilyNode? child;
+    setState(() {
+      child = store.addChild(
+        fromNodeId: fromNodeId,
+        name: name,
+        firstName: firstName,
+        middleName: r.middleName,
+        lastName: lastName,
+        nickname: r.nickname,
+        childGender: gender,
+        birthday: r.clearBirthday ? null : r.birthday,
+        photoUrl: photoUrl,
+        photoBytes: null,
+        barangay: r.details.barangay,
+        city: r.details.city,
+        province: r.details.province,
+        country: r.details.country,
+        phone: r.details.phone,
+        company: r.details.company,
+        jobTitle: r.details.jobTitle,
+        fb: r.details.fb,
+        ig: r.details.ig,
+        xAccount: r.details.xAccount,
+        tiktok: r.details.tiktok,
+      );
+
+      _hoveredNodeId = child!.id;
+    });
 
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _placeNear(
-        child.id,
+        child!.id,
         fromNodeId,
         Offset(0, cardSize.height + 40),
       );
@@ -2607,6 +2704,7 @@ Future<void> _showDetailsPopup({
                             ),
                           for (final entry in layout.entries)
                             AnimatedNode(
+                              key: ValueKey<int>(entry.key),
                               node: store.getNode(entry.key),
                               topLeft: entry.value,
                               size: cardSize,
