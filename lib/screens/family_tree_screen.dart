@@ -935,6 +935,144 @@ class _FamilyTreeScreenState extends State<FamilyTreeScreen> {
     });
   }
 
+
+  int? _preferredCoParentForConnectedChild({
+    required int parentId,
+    required int childId,
+  }) {
+    final parent = store.nodes[parentId];
+    final child = store.nodes[childId];
+    if (parent == null || child == null) return null;
+
+    // If connecting this parent already gives the child two parents, do not
+    // force another relationship. This keeps the normal two-parent limit.
+    if (child.parents.length >= 2) return null;
+
+    final coParentCounts = <int, int>{};
+
+    // Look at the parent's existing children and find the other parent most
+    // commonly shared with those children. This is intentionally gender-neutral:
+    // it works for mother+father, mother+mother, father+father, and any custom
+    // same-gender parent pairing.
+    for (final existingChildId in parent.children) {
+      if (existingChildId == childId) continue;
+
+      final existingChild = store.nodes[existingChildId];
+      if (existingChild == null) continue;
+      if (!existingChild.parents.contains(parentId)) continue;
+
+      for (final otherParentId in existingChild.parents) {
+        if (otherParentId == parentId) continue;
+        if (otherParentId == childId) continue;
+        if (!store.nodes.containsKey(otherParentId)) continue;
+        if (child.parents.contains(otherParentId)) continue;
+
+        coParentCounts[otherParentId] =
+            (coParentCounts[otherParentId] ?? 0) + 1;
+      }
+    }
+
+    if (coParentCounts.isEmpty) return null;
+
+    // Prefer an explicitly linked spouse if one is also the common co-parent,
+    // otherwise use the most common co-parent among existing siblings.
+    for (final spouseId in parent.spouses) {
+      if (coParentCounts.containsKey(spouseId)) return spouseId;
+    }
+
+    final ranked = coParentCounts.entries.toList()
+      ..sort((a, b) {
+        final byCount = b.value.compareTo(a.value);
+        if (byCount != 0) return byCount;
+        return a.key.compareTo(b.key);
+      });
+
+    return ranked.first.key;
+  }
+
+  void _placeConnectedChildWithSiblingsAfterRelayout({
+    required Map<int, Offset> beforePositions,
+    required Set<int> movingIds,
+    required int parentId,
+    required int childId,
+  }) {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+
+      final afterPositions = Map<int, Offset>.from(_lastLayoutScene);
+
+      // Keep existing nodes fixed after the relationship relayout. Only the
+      // connected child/component is moved into the existing sibling row.
+      for (final id in beforePositions.keys) {
+        if (movingIds.contains(id)) continue;
+
+        final before = beforePositions[id];
+        final after = afterPositions[id];
+        if (before == null || after == null) continue;
+
+        final delta = before - after;
+        if (delta.distance > 0.5) {
+          store.addManualOffset(id, delta);
+        }
+      }
+
+      final parentPos = beforePositions[parentId] ?? afterPositions[parentId];
+      final childPos = afterPositions[childId];
+      if (parentPos == null || childPos == null) return;
+
+      final idsToMove = movingIds
+          .where((id) => id != parentId && afterPositions.containsKey(id))
+          .toSet();
+      if (idsToMove.isEmpty) return;
+
+      final xStep = cardSize.width + hGap;
+
+      final siblingPositions = store.nodes.values
+          .where((node) =>
+              node.id != childId &&
+              node.parents.contains(parentId) &&
+              (beforePositions.containsKey(node.id) ||
+                  afterPositions.containsKey(node.id)))
+          .map((node) => beforePositions[node.id] ?? afterPositions[node.id]!)
+          .toList()
+        ..sort((a, b) => a.dx.compareTo(b.dx));
+
+      late final Offset desiredChildPos;
+      if (siblingPositions.isEmpty) {
+        desiredChildPos = parentPos + Offset(0, cardSize.height + 40);
+      } else {
+        final minSiblingX = siblingPositions.first.dx;
+        final maxSiblingX = siblingPositions.last.dx;
+        final averageSiblingY = siblingPositions
+                .map((p) => p.dy)
+                .reduce((a, b) => a + b) /
+            siblingPositions.length;
+
+        final parentTargetX = parentPos.dx;
+        final leftCandidateX = minSiblingX - xStep;
+        final rightCandidateX = maxSiblingX + xStep;
+
+        final useLeft =
+            (parentTargetX - leftCandidateX).abs() <
+                (parentTargetX - rightCandidateX).abs();
+
+        desiredChildPos = Offset(
+          useLeft ? leftCandidateX : rightCandidateX,
+          averageSiblingY,
+        );
+      }
+
+      final delta = desiredChildPos - childPos;
+      if (delta.distance <= 0.5) return;
+
+      if (idsToMove.length == 1) {
+        store.addManualOffset(idsToMove.first, delta);
+      } else {
+        store.addManualOffsetBulk(idsToMove, delta);
+      }
+    });
+  }
+
   Future<void> _connectExistingParentFlow({required int personId}) async {
     if (_previewMode) return;
     if (!await _requireLogin()) return;
@@ -1029,13 +1167,27 @@ class _FamilyTreeScreenState extends State<FamilyTreeScreen> {
       return;
     }
 
+    // Match Add Son / Add Daughter behavior: if this parent already has
+    // children with a co-parent, attach that same co-parent to the connected
+    // child too. This is gender-neutral, so same-gender parent pairs are
+    // handled the same as mother/father pairs.
+    final coParentId = _preferredCoParentForConnectedChild(
+      parentId: parentId,
+      childId: childId,
+    );
+    if (coParentId != null) {
+      store.tryLinkExistingChild(
+        parentId: coParentId,
+        childId: childId,
+      );
+    }
+
     setState(() => _hoveredNodeId = childId);
-    _placeConnectedMemberLikeNewAfterRelayout(
+    _placeConnectedChildWithSiblingsAfterRelayout(
       beforePositions: beforePositions,
       movingIds: movingIds,
-      movingRootId: childId,
-      anchorId: parentId,
-      offset: Offset(0, cardSize.height + 40),
+      parentId: parentId,
+      childId: childId,
     );
   }
 
@@ -3973,19 +4125,54 @@ class ConnectorPainter extends CustomPainter {
     final Map<String, _Group> groups = {};
     final Set<String> couplesWithChildren = {};
 
-    for (final child in store.nodes.values) {
-      if (child.parents.isEmpty) continue;
-      if (!positions.containsKey(child.id)) continue;
-
-      final parentIds = child.parents
+    List<int> visibleParentIdsOf(FamilyNode child) {
+      return child.parents
           .where((pid) => store.nodes.containsKey(pid))
+          .where((pid) => positions.containsKey(pid))
           .toList()
         ..sort();
+    }
+
+    List<int> connectorParentIdsFor(FamilyNode child) {
+      final parentIds = visibleParentIdsOf(child);
+      if (parentIds.isEmpty) return parentIds;
 
       if (parentIds.length == 1) {
         final onlyParentId = parentIds.first;
-        final onlyParent = store.nodes[onlyParentId];
 
+        // If this is a newly connected child with only one explicit parent,
+        // but existing siblings share this parent plus a co-parent, draw it on
+        // that same family bus. This is intentionally gender-neutral and does
+        // not depend on female/male parent pairing.
+        final siblingParentSetCounts = <String, int>{};
+        final siblingParentSets = <String, List<int>>{};
+
+        for (final sibling in store.nodes.values) {
+          if (sibling.id == child.id) continue;
+          if (!positions.containsKey(sibling.id)) continue;
+          if (!sibling.parents.contains(onlyParentId)) continue;
+
+          final siblingParents = visibleParentIdsOf(sibling);
+          if (siblingParents.length <= 1) continue;
+
+          final key = siblingParents.join('_');
+          siblingParentSetCounts[key] =
+              (siblingParentSetCounts[key] ?? 0) + 1;
+          siblingParentSets[key] = siblingParents;
+        }
+
+        if (siblingParentSetCounts.isNotEmpty) {
+          final bestKey = siblingParentSetCounts.entries.toList()
+            ..sort((a, b) {
+              final byCount = b.value.compareTo(a.value);
+              if (byCount != 0) return byCount;
+              return a.key.compareTo(b.key);
+            });
+          return siblingParentSets[bestKey.first.key]!;
+        }
+
+        // Fallback for spouse pairs where the child has only one parent saved.
+        final onlyParent = store.nodes[onlyParentId];
         if (onlyParent != null && onlyParent.spouses.isNotEmpty) {
           final spouseId = onlyParent.spouses.firstWhere(
             (sid) => positions.containsKey(sid),
@@ -3993,19 +4180,20 @@ class ConnectorPainter extends CustomPainter {
           );
 
           if (spouseId != -1) {
-            parentIds.add(spouseId);
-            parentIds.sort();
+            return (<int>[onlyParentId, spouseId]..sort());
           }
         }
       }
 
-      if (parentIds.isEmpty) continue;
+      return parentIds;
+    }
 
-      bool parentsHavePos = true;
-      for (final pid in parentIds) {
-        if (!positions.containsKey(pid)) parentsHavePos = false;
-      }
-      if (!parentsHavePos) continue;
+    for (final child in store.nodes.values) {
+      if (child.parents.isEmpty) continue;
+      if (!positions.containsKey(child.id)) continue;
+
+      final parentIds = connectorParentIdsFor(child);
+      if (parentIds.isEmpty) continue;
 
       final key = parentIds.join('_');
       couplesWithChildren.add(key);
