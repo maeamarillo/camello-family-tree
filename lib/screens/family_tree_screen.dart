@@ -178,11 +178,11 @@ class _FamilyTreeScreenState extends State<FamilyTreeScreen> {
 
   final TransformationController _tc = TransformationController();
 
-  static const double _minZoom = 0.3;
-  static const double _maxZoom = 3.0;
+  static const double _minZoom = 0.35;
+  static const double _maxZoom = 0.75;
   bool _didInitialCenter = false;
   bool _syncingFromController = false;
-  double _zoomValue = 1.0;
+  double _zoomValue = 0.35;
 
 
   int? _hoveredNodeId;
@@ -2510,11 +2510,11 @@ Future<void> _showDetailsPopup({
     _syncingFromController = true;
     _tc.value = Matrix4.identity()
       ..translate(viewportCenter.dx, viewportCenter.dy)
-      ..scale(1.0) // reset zoom to 1.0
+      ..scale(0.50) // reset zoom to 1.0
       ..translate(-nodeCenter.dx, -nodeCenter.dy);
     _syncingFromController = false;
 
-    setState(() => _zoomValue = 1.0);
+    setState(() => _zoomValue = 0.35);
   }
 
   @override
